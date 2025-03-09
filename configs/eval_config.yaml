@@ -1,0 +1,85 @@
+# Evaluation Configuration
+
+# Basic evaluation parameters
+seed: 42
+batch_size: 8
+num_workers: 4
+
+# Datasets for evaluation
+eval_datasets:
+  gsm8k:
+    path: "gsm8k"
+    split: "test"
+    subset: null
+    max_samples: 500
+  math:
+    path: "hendrycks_math"
+    split: "test"
+    subset: "all"
+    max_samples: 500
+  custom_math:
+    path: "data/test_data.jsonl"
+    split: null
+    subset: null
+    max_samples: null
+
+# Generation parameters
+generation:
+  max_new_tokens: 512
+  do_sample: false
+  temperature: 0.7
+  top_p: 0.95
+  top_k: 50
+  num_beams: 1
+  repetition_penalty: 1.1
+  no_repeat_ngram_size: 3
+  early_stopping: true
+
+# Metrics
+metrics:
+  - "exact_match"
+  - "f1_score"
+  - "normalized_edit_distance"
+  - "correctly_parsed"
+  - "mathematical_accuracy"
+  - "step_by_step_accuracy"
+  - "final_answer_accuracy"
+
+# Templates for prompt formatting
+prompt_templates:
+  default: |
+    Solve the following math problem step by step:
+    {problem}
+    
+    Solution:
+  gsm8k: |
+    Solve the following grade school math problem step by step:
+    {problem}
+    
+    Solution:
+  math: |
+    Solve the following mathematics problem step by step:
+    {problem}
+    
+    Solution:
+
+# Analysis settings
+analysis:
+  calculate_confidence: true
+  analyze_errors: true
+  generate_plots: true
+  save_predictions: true
+  compare_generations: true
+
+# Output settings
+output_dir: "results/{model_name}"
+save_plots: true
+save_raw_results: true
+save_summary: true
+wandb_logging: true
+wandb_project: "finellama-rl"
+wandb_run_name: "eval-{model_name}"
+
+# Resource settings
+use_gpu: true
+mixed_precision: "bf16" 

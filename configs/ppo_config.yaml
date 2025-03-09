@@ -1,0 +1,61 @@
+# PPO Training Configuration
+
+# Training parameters
+seed: 42
+num_epochs: 5
+max_steps: 20000
+mini_batch_size: 8
+batch_size: 128
+gradient_accumulation_steps: 8
+learning_rate: 1.0e-5
+max_grad_norm: 1.0
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_epsilon: 1.0e-8
+weight_decay: 0.01
+warmup_steps: 100
+lr_scheduler_type: "cosine"
+save_interval: 500
+eval_interval: 200
+log_interval: 10
+
+# PPO specific parameters
+ppo_epochs: 4  # Number of PPO epochs per batch of experiences
+clip_range: 0.2  # PPO clipping range
+value_clip_range: 0.2  # Clipping range for value function
+target_kl: 0.01  # Target KL divergence threshold for early stopping
+normalize_advantage: true  # Whether to normalize advantages
+vf_coef: 0.5  # Value function coefficient in loss
+entropy_coef: 0.01  # Entropy coefficient in loss
+gamma: 0.99  # Discount factor
+lam: 0.95  # GAE lambda parameter
+use_adaptive_kl: true  # Use adaptive KL penalty
+init_kl_coef: 0.2  # Initial KL penalty coefficient
+adap_kl_target: 6.0  # Target KL for adaptive penalty
+
+# Generation parameters for rollouts
+prompt_max_length: 512  # Maximum prompt length
+response_max_length: 512  # Maximum response length
+temperature: 1.0  # Temperature for generation during rollouts
+top_p: 1.0  # Top-p sampling parameter during rollouts
+do_sample: true  # Whether to use sampling during rollouts
+
+# Reward parameters
+math_correctness_weight: 1.0  # Weight for mathematical correctness reward
+process_weight: 0.5  # Weight for reasoning process reward
+brevity_weight: 0.1  # Weight for brevity reward (penalizes overly verbose answers)
+use_reference_kl: true  # Use KL divergence from reference model as additional penalty
+kl_penalty_weight: 0.05  # Weight for reference KL penalty
+max_length_penalty: 0.001  # Penalty per token beyond optimal length
+
+# Experience collection
+num_rollouts: 64  # Number of rollouts per batch
+rollout_batch_size: 16  # Batch size for collecting rollouts
+
+# Output directories
+output_dir: "checkpoints/ppo_model"
+tensorboard_dir: "logs/ppo_tensorboard"
+wandb_logging: true  # Whether to use Weights & Biases logging
+
+# Resources
+num_workers: 4  # Number of parallel workers for data loading 
