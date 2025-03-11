@@ -1,0 +1,92 @@
+# Environment variables and secrets
+.env
+*.env
+.env.*
+.token
+secrets.yaml
+
+# HuggingFace cache and model files
+.huggingface_cache/
+*.huggingface_cache/
+.cache/
+models/
+**/models/
+
+# Data files
+data/raw/
+data/processed/
+*.json
+*.jsonl
+*.csv
+*.tsv
+*.parquet
+*.arrow
+
+# Results, logs and outputs
+results/
+logs/
+**/logs/
+output/
+**/output/
+tmp*/
+*_results/
+*predictions.jsonl
+*.log
+slurm-*.out
+
+# Temporary config files
+**/tmp_*.yaml
+tmp_*.yaml
+tmp_*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Jupyter
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+.jupyter/
+*_hidden.*
+
+# OS specific
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Editor specific
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Apptainer/Singularity container files
+*.sif
+*.simg
+*.img 

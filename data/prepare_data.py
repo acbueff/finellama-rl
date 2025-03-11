@@ -86,7 +86,7 @@ def prepare_gsm8k(
 ) -> Dataset:
     """Prepare the GSM8K dataset."""
     dataset = processor.load_dataset(
-        dataset_name="gsm8k",
+        dataset_name="openai/gsm8k",
         subset="main",
         split=split,
         max_samples=max_samples
