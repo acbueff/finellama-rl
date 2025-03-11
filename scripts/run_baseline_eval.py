@@ -63,6 +63,12 @@ def parse_args():
         default=None,
         help="Comma-separated list of datasets to evaluate on (None for all configured datasets)"
     )
+    parser.add_argument(
+        "--use_gguf",
+        type=bool,
+        default=False,
+        help="Whether to use GGUF model loading (via ctransformers)"
+    )
     
     return parser.parse_args()
 
@@ -83,12 +89,16 @@ def main():
     # Override seed in configuration
     eval_config["seed"] = args.seed
     
+    # Add GGUF configuration if specified
+    if args.use_gguf:
+        eval_config["use_gguf"] = True
+    
     # Create evaluator
     evaluator = MathEvaluator(config=eval_config)
     
     # Load model for evaluation
     logger.info(f"Loading baseline model from {args.model_path}")
-    evaluator.load_model("baseline", args.model_path, model_type="baseline")
+    evaluator.load_model("baseline", args.model_path, model_type="baseline", use_gguf=args.use_gguf)
     
     # Load evaluation datasets
     evaluator.load_evaluation_datasets()

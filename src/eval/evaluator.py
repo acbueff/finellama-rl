@@ -76,15 +76,17 @@ class MathEvaluator:
         self,
         model_name: str,
         model_path: str,
-        model_type: str = "baseline"
+        model_type: str = "baseline",
+        use_gguf: bool = False
     ) -> Tuple[PreTrainedModel, PreTrainedTokenizer]:
         """
-        Load a model and tokenizer for evaluation.
+        Load a model and tokenizer from a specified path.
         
         Args:
-            model_name: Name to identify the model in results
-            model_path: Path to the model checkpoint
-            model_type: Type of model ("baseline", "ppo", or "grpo")
+            model_name: Name to use for this model in the evaluator
+            model_path: Path to the model or HF model ID
+            model_type: Type of model (baseline, rl, etc.)
+            use_gguf: Whether to use GGUF model loading via ctransformers
             
         Returns:
             Tuple containing (model, tokenizer)
@@ -92,22 +94,36 @@ class MathEvaluator:
         logger.info(f"Loading {model_type} model from {model_path}")
         
         try:
-            # Check if model path contains config.yaml
-            config_path = os.path.join(model_path, "model_config.yaml")
-            
-            if os.path.exists(config_path):
-                # Load using FineMathLlamaModel
-                model_wrapper = FineMathLlamaModel(config_path=config_path)
-                model, tokenizer = model_wrapper.load_model()
+            if use_gguf:
+                # Load GGUF model using ctransformers
+                logger.info("Using ctransformers to load GGUF model")
+                from ctransformers import AutoModelForCausalLM as CTAutoModelForCausalLM
+                from ctransformers import AutoTokenizer as CTAutoTokenizer
+                
+                # Load the model and tokenizer
+                model = CTAutoModelForCausalLM.from_pretrained(
+                    model_path,
+                    model_type="llama",  # Assuming it's a Llama model
+                    gpu_layers=50,       # Use as many layers on GPU as possible
+                    threads=8            # Number of CPU threads to use
+                )
+                
+                # For GGUF models, we might need to use the original model's tokenizer
+                tokenizer_repo = model_path if "/" in model_path else "HuggingFaceTB/FineMath-Llama-3B"
+                tokenizer = CTAutoTokenizer.from_pretrained(tokenizer_repo)
+                
+                # Set pad token if not defined
+                if tokenizer.pad_token is None:
+                    tokenizer.pad_token = tokenizer.eos_token
             else:
-                # Load directly using HuggingFace
-                tokenizer = AutoTokenizer.from_pretrained(model_path)
+                # Simple direct loading approach similar to HuggingFace examples
+                tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
                 
                 # Ensure the tokenizer has pad_token set
                 if tokenizer.pad_token is None:
                     tokenizer.pad_token = tokenizer.eos_token
-                    
-                # Load the model with appropriate quantization
+                
+                # Determine if we should use 4-bit quantization
                 use_4bit = self.config.get("use_4bit", True)
                 
                 if use_4bit:
@@ -124,25 +140,26 @@ class MathEvaluator:
                         model_path,
                         quantization_config=quantization_config,
                         torch_dtype=torch.bfloat16 if self.config.get("bf16", True) else torch.float16,
-                        device_map="auto"
+                        device_map="auto",
+                        trust_remote_code=True
                     )
                 else:
                     # Load without quantization
                     model = AutoModelForCausalLM.from_pretrained(
                         model_path,
                         torch_dtype=torch.bfloat16 if self.config.get("bf16", True) else torch.float16,
-                        device_map="auto"
+                        device_map="auto",
+                        trust_remote_code=True
                     )
-                    
+                
             # Store model and tokenizer
             self.models[model_name] = model
             self.tokenizers[model_name] = tokenizer
             
-            logger.info(f"Successfully loaded model {model_name}")
             return model, tokenizer
             
         except Exception as e:
-            logger.error(f"Failed to load model {model_name}: {e}")
+            logger.error(f"Failed to load model {model_name}: {str(e)}")
             raise
     
     def load_evaluation_datasets(self) -> Dict[str, Dataset]:
