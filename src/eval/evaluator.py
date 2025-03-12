@@ -117,7 +117,12 @@ class MathEvaluator:
                     tokenizer.pad_token = tokenizer.eos_token
             else:
                 # Simple direct loading approach similar to HuggingFace examples
-                tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+                logger.info("Loading tokenizer with trust_remote_code=True")
+                tokenizer = AutoTokenizer.from_pretrained(
+                    model_path, 
+                    trust_remote_code=True,
+                    use_fast=False  # Using slow tokenizer for better compatibility
+                )
                 
                 # Ensure the tokenizer has pad_token set
                 if tokenizer.pad_token is None:
@@ -126,36 +131,101 @@ class MathEvaluator:
                 # Determine if we should use 4-bit quantization
                 use_4bit = self.config.get("use_4bit", True)
                 
-                if use_4bit:
-                    # Load in 4-bit to save memory
-                    from transformers import BitsAndBytesConfig
-                    quantization_config = BitsAndBytesConfig(
-                        load_in_4bit=True,
-                        bnb_4bit_compute_dtype=torch.bfloat16,
-                        bnb_4bit_use_double_quant=True,
-                        bnb_4bit_quant_type="nf4"
-                    )
-                    
-                    model = AutoModelForCausalLM.from_pretrained(
-                        model_path,
-                        quantization_config=quantization_config,
-                        torch_dtype=torch.bfloat16 if self.config.get("bf16", True) else torch.float16,
-                        device_map="auto",
-                        trust_remote_code=True
-                    )
-                else:
-                    # Load without quantization
-                    model = AutoModelForCausalLM.from_pretrained(
-                        model_path,
-                        torch_dtype=torch.bfloat16 if self.config.get("bf16", True) else torch.float16,
-                        device_map="auto",
-                        trust_remote_code=True
-                    )
+                logger.info(f"Loading model with use_4bit={use_4bit}, trust_remote_code=True")
+                
+                try:
+                    if use_4bit:
+                        # Load in 4-bit to save memory
+                        from transformers import BitsAndBytesConfig
+                        quantization_config = BitsAndBytesConfig(
+                            load_in_4bit=True,
+                            bnb_4bit_compute_dtype=torch.bfloat16,
+                            bnb_4bit_use_double_quant=True,
+                            bnb_4bit_quant_type="nf4"
+                        )
+                        
+                        model = AutoModelForCausalLM.from_pretrained(
+                            model_path,
+                            quantization_config=quantization_config,
+                            torch_dtype=torch.bfloat16 if self.config.get("bf16", True) else torch.float16,
+                            device_map="auto",
+                            trust_remote_code=True,
+                            ignore_mismatched_sizes=True,
+                            low_cpu_mem_usage=True
+                        )
+                    else:
+                        # Load without quantization
+                        model = AutoModelForCausalLM.from_pretrained(
+                            model_path,
+                            torch_dtype=torch.bfloat16 if self.config.get("bf16", True) else torch.float16,
+                            device_map="auto",
+                            trust_remote_code=True,
+                            ignore_mismatched_sizes=True,
+                            low_cpu_mem_usage=True
+                        )
+                except ValueError as e:
+                    if "rope_scaling" in str(e):
+                        logger.warning("Encountered rope_scaling issue. Attempting to load with different config.")
+                        
+                        # Try alternative loading approach
+                        from transformers import AutoConfig
+                        
+                        # Get configuration but don't validate
+                        config = AutoConfig.from_pretrained(
+                            model_path,
+                            trust_remote_code=True,
+                        )
+                        
+                        # If it has rope_scaling, modify it to be compatible
+                        if hasattr(config, "rope_scaling") and isinstance(config.rope_scaling, dict):
+                            logger.info(f"Original rope_scaling: {config.rope_scaling}")
+                            # Simplify the rope_scaling config
+                            if "factor" in config.rope_scaling:
+                                config.rope_scaling = {
+                                    "type": "linear",
+                                    "factor": float(config.rope_scaling["factor"])
+                                }
+                                logger.info(f"Modified rope_scaling: {config.rope_scaling}")
+                        
+                        # Try again with our modified config
+                        if use_4bit:
+                            from transformers import BitsAndBytesConfig
+                            quantization_config = BitsAndBytesConfig(
+                                load_in_4bit=True,
+                                bnb_4bit_compute_dtype=torch.bfloat16,
+                                bnb_4bit_use_double_quant=True,
+                                bnb_4bit_quant_type="nf4"
+                            )
+                            
+                            model = AutoModelForCausalLM.from_pretrained(
+                                model_path,
+                                config=config,
+                                quantization_config=quantization_config,
+                                torch_dtype=torch.bfloat16 if self.config.get("bf16", True) else torch.float16,
+                                device_map="auto",
+                                trust_remote_code=True,
+                                ignore_mismatched_sizes=True,
+                                low_cpu_mem_usage=True
+                            )
+                        else:
+                            model = AutoModelForCausalLM.from_pretrained(
+                                model_path,
+                                config=config,
+                                torch_dtype=torch.bfloat16 if self.config.get("bf16", True) else torch.float16,
+                                device_map="auto",
+                                trust_remote_code=True,
+                                ignore_mismatched_sizes=True,
+                                low_cpu_mem_usage=True
+                            )
+                    else:
+                        # Re-raise if not a rope_scaling issue
+                        raise
                 
             # Store model and tokenizer
             self.models[model_name] = model
             self.tokenizers[model_name] = tokenizer
             
+            logger.info(f"Successfully loaded model {model_name}")
             return model, tokenizer
             
         except Exception as e:

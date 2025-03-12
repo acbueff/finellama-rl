@@ -4,6 +4,7 @@ Script to evaluate the baseline FineMath-Llama-3B model.
 """
 
 import os
+import sys
 import argparse
 import logging
 import yaml
@@ -23,7 +24,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def parse_args():
+def parse_args(args=None):
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Evaluate baseline FineMath-Llama-3B model")
     
@@ -70,11 +71,11 @@ def parse_args():
         help="Whether to use GGUF model loading (via ctransformers)"
     )
     
-    return parser.parse_args()
+    return parser.parse_args(args)
 
-def main():
+def main(cmd_line_args=None):
     """Run baseline model evaluation."""
-    args = parse_args()
+    args = parse_args(cmd_line_args)
     
     # Set random seed
     set_seed(args.seed)
@@ -157,4 +158,8 @@ def main():
     logger.info(f"Evaluation complete. Results saved to {args.output_dir}")
 
 if __name__ == "__main__":
-    main() 
+    # Check if we're running from a monkey patched environment
+    if 'cmd_line_args' in globals():
+        main(globals()['cmd_line_args'])
+    else:
+        main() 
