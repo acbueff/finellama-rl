@@ -62,60 +62,15 @@ with open('${TMP_CONFIG}', 'w') as f:
 print(f'Created custom GSM8K evaluation config at ${TMP_CONFIG}')
 "
 
-# Create a monkey patch to disable rope_scaling validation
-MONKEY_PATCH="${OUTPUT_DIR}/disable_rope_validation.py"
+# Step 2: Modify transformers library to accept any rope_scaling format
+echo "Creating new patch Llama script that disables rope_scaling validation..."
 
-cat > ${MONKEY_PATCH} << 'EOL'
-"""
-Monkey patch to disable rope_scaling validation in LlamaConfig
-"""
-from transformers.models.llama.configuration_llama import LlamaConfig
-
-# Store the original validation method
-original_validation = LlamaConfig._rope_scaling_validation
-
-# Replace with no-op function
-def no_validation(self):
-    # This function does nothing
-    pass
-
-# Apply the monkey patch
-LlamaConfig._rope_scaling_validation = no_validation
-print("Applied monkey patch to disable rope_scaling validation")
-EOL
-
-# Create a simple script to run the evaluation with the monkey patch
-EVAL_SCRIPT="${OUTPUT_DIR}/run_with_monkey_patch.py"
-
-cat > ${EVAL_SCRIPT} << 'EOL'
-#!/usr/bin/env python
-"""
-Script to run the evaluation with the monkey patch applied.
-"""
-import os
-import sys
-
-# Apply the monkey patch first
-exec(open(os.path.join(os.environ["OUTPUT_DIR"], "disable_rope_validation.py")).read())
-
-# Then import and run the evaluation script
-sys.path.insert(0, os.getcwd())
-
-from scripts.run_baseline_eval import main
-
-# Run the evaluation with the provided arguments
-if __name__ == "__main__":
-    main(sys.argv[1:])
-EOL
-
-chmod +x ${EVAL_SCRIPT}
-
-echo "Running GSM8K evaluation with disabled rope_scaling validation..."
+# Step 3: Run the evaluation using our wrapper that patches LlamaConfig
+echo "Running GSM8K evaluation with LlamaConfig patch..."
 apptainer exec --nv \
   --env PYTHONPATH="${PROJECT_ROOT}:$PYTHONPATH" \
-  --env OUTPUT_DIR="${OUTPUT_DIR}" \
   ${APPTAINER_ENV} \
-  python ${EVAL_SCRIPT} \
+  python ${PROJECT_ROOT}/run_with_patch.py \
   --config ${TMP_CONFIG} \
   --model_path ${MODEL_ID} \
   --output_dir ${OUTPUT_DIR} \

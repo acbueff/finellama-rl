@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 """
-Standalone script to evaluate FineMath-Llama-3B on GSM8K.
-This script completely bypasses the rope_scaling validation by directly modifying
-the model's configuration before loading.
+Standalone script to evaluate Qwen2.5-7B-DPO-VP on GSM8K.
+This script completely bypasses any validation issues
+by directly implementing the evaluation logic.
 """
 
 import os
@@ -14,14 +14,7 @@ import argparse
 from tqdm import tqdm
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-
-from transformers import (
-    AutoConfig, 
-    AutoModelForCausalLM, 
-    AutoTokenizer, 
-    BitsAndBytesConfig
-)
-from datasets import load_dataset
+import re
 
 # Configure logging
 logging.basicConfig(
@@ -32,12 +25,12 @@ logger = logging.getLogger(__name__)
 
 def parse_args():
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="GSM8K Evaluation with rope_scaling fix")
+    parser = argparse.ArgumentParser(description="Standalone GSM8K Evaluation")
     
     parser.add_argument(
         "--model_id", 
         type=str, 
-        default="HuggingFaceTB/FineMath-Llama-3B",
+        default="SunnyLin/Qwen2.5-7B-DPO-VP",
         help="Path to model or Hugging Face model ID"
     )
     parser.add_argument(
@@ -55,7 +48,7 @@ def parse_args():
     parser.add_argument(
         "--num_examples", 
         type=int, 
-        default=-1,
+        default=50,
         help="Number of examples to evaluate (-1 for all)"
     )
     parser.add_argument(
@@ -82,33 +75,61 @@ def load_gsm8k_dataset(data_path: str, num_examples: int = -1):
     """Load the GSM8K dataset."""
     logger.info(f"Loading GSM8K dataset from {data_path}")
     
-    if os.path.exists(data_path):
-        # Load from local file
-        dataset = load_dataset('json', data_files=data_path, split='train')
-    else:
-        # Try loading from HuggingFace datasets
-        dataset = load_dataset('gsm8k', 'main', split='test')
+    # Load the dataset - handle both JSON and JSONL formats
+    dataset = []
+    
+    try:
+        # First try loading as a single JSON object
+        with open(data_path, 'r') as f:
+            data = json.load(f)
+        
+        # If it's a list, use it directly
+        if isinstance(data, list):
+            dataset = data
+        # If it's a dictionary with a 'data' field, use that
+        elif isinstance(data, dict) and 'data' in data:
+            dataset = data['data']
+        # If it's a dictionary with examples, convert to list
+        else:
+            dataset = [data]
+    except json.JSONDecodeError:
+        # If that fails, try loading as JSONL (line-by-line JSON objects)
+        logger.info("JSON loading failed, trying JSONL format")
+        dataset = []
+        with open(data_path, 'r') as f:
+            for line in f:
+                if line.strip():  # Skip empty lines
+                    try:
+                        example = json.loads(line)
+                        dataset.append(example)
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Error parsing line: {line[:50]}... - {str(e)}")
     
     logger.info(f"Loaded {len(dataset)} examples")
     
     # Limit number of examples if specified
     if num_examples > 0 and num_examples < len(dataset):
-        dataset = dataset.select(range(num_examples))
+        dataset = dataset[:num_examples]
         logger.info(f"Using {num_examples} examples for evaluation")
     
     return dataset
 
-def load_model_with_fixed_config(model_id: str, use_4bit: bool = True):
+def load_model_directly(model_id: str, use_4bit: bool = True):
     """
-    Load the model with a fixed configuration that bypasses rope_scaling validation.
+    Load the model directly.
     """
-    logger.info(f"Loading model {model_id} with fixed configuration")
+    logger.info(f"Loading model {model_id} directly")
+    
+    # Import here to avoid validation at module level
+    import transformers
+    from transformers import AutoTokenizer
     
     # First, load the tokenizer
     tokenizer = AutoTokenizer.from_pretrained(
         model_id,
         trust_remote_code=True,
-        use_fast=False
+        use_fast=False,
+        padding_side='left'  # Set padding to left side for decoder-only models
     )
     
     # Ensure pad token is set
@@ -116,29 +137,12 @@ def load_model_with_fixed_config(model_id: str, use_4bit: bool = True):
         tokenizer.pad_token = tokenizer.eos_token
         logger.info("Set pad_token to eos_token")
     
-    # Load the config
-    config = AutoConfig.from_pretrained(
-        model_id,
-        trust_remote_code=True
-    )
-    
-    # Fix rope_scaling by completely replacing it
-    if hasattr(config, "rope_scaling"):
-        logger.info(f"Original rope_scaling: {config.rope_scaling}")
-        # Replace with a simple compatible version
-        config.rope_scaling = {"type": "linear", "factor": 1.0}
-        logger.info(f"Fixed rope_scaling: {config.rope_scaling}")
-    
-    # Monkey patch the validation method to be a no-op
-    from transformers.models.llama.configuration_llama import LlamaConfig
-    original_validation = LlamaConfig._rope_scaling_validation
-    LlamaConfig._rope_scaling_validation = lambda self: None
-    logger.info("Disabled rope_scaling validation")
-    
-    # Load the model with our fixed config
     try:
+        # Load the model with 4-bit quantization if requested
         if use_4bit:
-            # Use 4-bit quantization to save memory
+            from transformers import BitsAndBytesConfig, AutoModelForCausalLM
+            
+            # Configure 4-bit quantization
             quantization_config = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_compute_dtype=torch.bfloat16,
@@ -146,9 +150,9 @@ def load_model_with_fixed_config(model_id: str, use_4bit: bool = True):
                 bnb_4bit_quant_type="nf4"
             )
             
+            # Load the model
             model = AutoModelForCausalLM.from_pretrained(
                 model_id,
-                config=config,
                 quantization_config=quantization_config,
                 torch_dtype=torch.bfloat16,
                 device_map="auto",
@@ -157,9 +161,11 @@ def load_model_with_fixed_config(model_id: str, use_4bit: bool = True):
                 low_cpu_mem_usage=True
             )
         else:
+            from transformers import AutoModelForCausalLM
+            
+            # Load the model without quantization
             model = AutoModelForCausalLM.from_pretrained(
                 model_id,
-                config=config,
                 torch_dtype=torch.bfloat16,
                 device_map="auto",
                 trust_remote_code=True,
@@ -169,14 +175,9 @@ def load_model_with_fixed_config(model_id: str, use_4bit: bool = True):
         
         logger.info("Model loaded successfully")
         
-        # Restore the original validation method
-        LlamaConfig._rope_scaling_validation = original_validation
-        
         return model, tokenizer
-        
+    
     except Exception as e:
-        # Restore the original validation method
-        LlamaConfig._rope_scaling_validation = original_validation
         logger.error(f"Failed to load model: {str(e)}")
         raise
 
@@ -218,8 +219,7 @@ def generate_answers(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 max_new_tokens=max_tokens,
-                do_sample=False,
-                temperature=0.7,
+                do_sample=False,  # Use greedy decoding
                 num_beams=1,
                 pad_token_id=tokenizer.pad_token_id,
                 eos_token_id=tokenizer.eos_token_id
@@ -239,15 +239,38 @@ def generate_answers(
     
     return all_outputs
 
-def extract_answer(text: str) -> Optional[str]:
-    """Extract the final answer from the generated text."""
-    if "####" in text:
-        parts = text.split("####")
-        if len(parts) > 1:
-            answer = parts[-1].strip()
-            # Clean up the answer (keep only digits, decimal points, and minus signs)
-            answer = ''.join(c for c in answer if c.isdigit() or c == '.' or c == '-')
-            return answer
+def extract_answer(text):
+    """Extract the answer from the text."""
+    # First check for the standard GSM8K format with ####
+    if '####' in text:
+        match = re.search(r'####\s*(\d+(?:,\d+)*(?:\.\d+)?)', text)
+        if match:
+            return match.group(1).replace(',', '')
+    
+    # Look for "Therefore" or "Thus" statements with numbers at the end
+    therefore_pattern = re.search(r'(?:Therefore|Thus|In conclusion|The answer is)[^.]*?(\d+(?:,\d+)*(?:\.\d+)?)[^.]*\.', text)
+    if therefore_pattern:
+        return therefore_pattern.group(1).replace(',', '')
+    
+    # Look for the last equation with an equal sign
+    equations = re.findall(r'(\d+(?:,\d+)*(?:\.\d+)?)\s*=\s*(\$?\s*\d+(?:,\d+)*(?:\.\d+)?)', text)
+    if equations:
+        # Get the last equation result, remove $ if present
+        last_result = equations[-1][1].replace('$', '').replace(',', '').strip()
+        return last_result
+    
+    # Look for dollar amounts
+    money_pattern = re.search(r'\$\s*(\d+(?:,\d+)*(?:\.\d+)?)', text)
+    if money_pattern:
+        return money_pattern.group(1).replace(',', '')
+    
+    # Split by sentences and find the last sentence with a number
+    sentences = re.split(r'[.!?]+', text)
+    for sentence in reversed(sentences):
+        number_pattern = re.search(r'(\d+(?:,\d+)*(?:\.\d+)?)', sentence)
+        if number_pattern:
+            return number_pattern.group(1).replace(',', '')
+    
     return None
 
 def evaluate_answers(predictions: List[str], references: List[str]) -> Dict[str, Any]:
@@ -328,12 +351,20 @@ def main():
         # Load dataset
         dataset = load_gsm8k_dataset(args.gsm8k_path, args.num_examples)
         
-        # Load model with fixed config
-        model, tokenizer = load_model_with_fixed_config(args.model_id, args.use_4bit)
+        # Extract questions and references
+        questions = []
+        references = []
+        
+        for example in dataset:
+            questions.append(example.get("question", ""))
+            references.append(example.get("answer", ""))
+        
+        logger.info(f"Extracted {len(questions)} questions and {len(references)} references")
+        
+        # Load model with direct approach
+        model, tokenizer = load_model_directly(args.model_id, args.use_4bit)
         
         # Generate answers
-        questions = dataset["question"]
-        references = dataset["answer"]
         predictions = generate_answers(
             model, 
             tokenizer, 

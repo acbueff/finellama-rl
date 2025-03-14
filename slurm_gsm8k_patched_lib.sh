@@ -62,60 +62,27 @@ with open('${TMP_CONFIG}', 'w') as f:
 print(f'Created custom GSM8K evaluation config at ${TMP_CONFIG}')
 "
 
-# Create a monkey patch to disable rope_scaling validation
-MONKEY_PATCH="${OUTPUT_DIR}/disable_rope_validation.py"
-
-cat > ${MONKEY_PATCH} << 'EOL'
-"""
-Monkey patch to disable rope_scaling validation in LlamaConfig
-"""
-from transformers.models.llama.configuration_llama import LlamaConfig
-
-# Store the original validation method
-original_validation = LlamaConfig._rope_scaling_validation
-
-# Replace with no-op function
-def no_validation(self):
-    # This function does nothing
-    pass
-
-# Apply the monkey patch
-LlamaConfig._rope_scaling_validation = no_validation
-print("Applied monkey patch to disable rope_scaling validation")
-EOL
-
-# Create a simple script to run the evaluation with the monkey patch
-EVAL_SCRIPT="${OUTPUT_DIR}/run_with_monkey_patch.py"
-
-cat > ${EVAL_SCRIPT} << 'EOL'
-#!/usr/bin/env python
-"""
-Script to run the evaluation with the monkey patch applied.
-"""
-import os
-import sys
-
-# Apply the monkey patch first
-exec(open(os.path.join(os.environ["OUTPUT_DIR"], "disable_rope_validation.py")).read())
-
-# Then import and run the evaluation script
-sys.path.insert(0, os.getcwd())
-
-from scripts.run_baseline_eval import main
-
-# Run the evaluation with the provided arguments
-if __name__ == "__main__":
-    main(sys.argv[1:])
-EOL
-
-chmod +x ${EVAL_SCRIPT}
-
-echo "Running GSM8K evaluation with disabled rope_scaling validation..."
+# Step 2: Patch the transformers library to fix rope_scaling validation
+echo "Patching transformers library to fix rope_scaling validation..."
 apptainer exec --nv \
   --env PYTHONPATH="${PROJECT_ROOT}:$PYTHONPATH" \
-  --env OUTPUT_DIR="${OUTPUT_DIR}" \
   ${APPTAINER_ENV} \
-  python ${EVAL_SCRIPT} \
+  python ${PROJECT_ROOT}/patch_transformers.py
+
+# Check if the patch was successful
+if [ $? -ne 0 ]; then
+  echo "Failed to patch transformers library. Exiting."
+  exit 1
+fi
+
+echo "Transformers library patched successfully."
+
+# Step 3: Run the evaluation with the patched library
+echo "Running GSM8K evaluation with patched transformers library..."
+apptainer exec --nv \
+  --env PYTHONPATH="${PROJECT_ROOT}:$PYTHONPATH" \
+  ${APPTAINER_ENV} \
+  python ${PROJECT_ROOT}/scripts/run_baseline_eval.py \
   --config ${TMP_CONFIG} \
   --model_path ${MODEL_ID} \
   --output_dir ${OUTPUT_DIR} \
