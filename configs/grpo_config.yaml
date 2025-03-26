@@ -60,8 +60,8 @@ max_diversity_metric: "cosine"  # Metric to use for measuring diversity
 min_token_difference: 10  # Minimum number of different tokens to consider samples diverse
 
 # Output directories
-output_dir: "checkpoints/grpo_model"
-tensorboard_dir: "logs/grpo_tensorboard"
+output_dir: "/proj/berzelius-aiics-real/users/x_anbue/ppo_grpo/models/grpo_finetuned"
+tensorboard_dir: "/proj/berzelius-aiics-real/users/x_anbue/ppo_grpo/results/grpo/tensorboard"
 wandb_logging: true  # Whether to use Weights & Biases logging
 
 # Resources

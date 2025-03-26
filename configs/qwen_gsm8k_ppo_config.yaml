@@ -1,13 +1,13 @@
-# PPO Training Configuration
+# PPO Training Configuration for Qwen2.5 3B on GSM8K
 
 # Training parameters
 seed: 42
-num_epochs: 5
-max_steps: 20000
-mini_batch_size: 8
-batch_size: 128
-gradient_accumulation_steps: 8
-learning_rate: 1.0e-5
+num_epochs: 3  # Reduced number of epochs to avoid overfitting on GSM8K
+max_steps: 5000
+mini_batch_size: 4  # Reduced from 8 to 4
+batch_size: 4  # Reduced from 8 to 4 to address GPU memory issues
+gradient_accumulation_steps: 16  # Increased from 8 to 16
+learning_rate: 2.0e-5  # Slightly higher learning rate
 max_grad_norm: 1.0
 adam_beta1: 0.9
 adam_beta2: 0.999
@@ -15,12 +15,12 @@ adam_epsilon: 1.0e-8
 weight_decay: 0.01
 warmup_steps: 100
 lr_scheduler_type: "cosine"
-save_interval: 500
-eval_interval: 200
+save_interval: 200
+eval_interval: 100
 log_interval: 10
 
 # PPO specific parameters
-ppo_epochs: 4  # Number of PPO epochs per batch of experiences
+ppo_epochs: 2  # Reduced from 4 to 2 to save memory
 clip_range: 0.2  # PPO clipping range
 value_clip_range: 0.2  # Clipping range for value function
 target_kl: 0.01  # Target KL divergence threshold for early stopping
@@ -34,8 +34,8 @@ init_kl_coef: 0.2  # Initial KL penalty coefficient
 adap_kl_target: 6.0  # Target KL for adaptive penalty
 
 # Generation parameters for rollouts
-prompt_max_length: 512  # Maximum prompt length
-response_max_length: 512  # Maximum response length
+prompt_max_length: 384  # Reduced from 512 to 384
+response_max_length: 384  # Reduced from 512 to 384
 temperature: 1.0  # Temperature for generation during rollouts
 top_p: 1.0  # Top-p sampling parameter during rollouts
 do_sample: true  # Whether to use sampling during rollouts
@@ -49,12 +49,12 @@ kl_penalty_weight: 0.05  # Weight for reference KL penalty
 max_length_penalty: 0.001  # Penalty per token beyond optimal length
 
 # Experience collection
-num_rollouts: 64  # Number of rollouts per batch
-rollout_batch_size: 16  # Batch size for collecting rollouts
+num_rollouts: 16  # Reduced from 32 to 16
+rollout_batch_size: 4  # Reduced from 8 to 4
 
 # Output directories
-output_dir: "/proj/berzelius-aiics-real/users/x_anbue/ppo_grpo/models/ppo_finetuned"
-tensorboard_dir: "/proj/berzelius-aiics-real/users/x_anbue/ppo_grpo/results/ppo/tensorboard"
+output_dir: "/proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/models/ppo_finetuned"
+tensorboard_dir: "/proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/results/tensorboard"
 wandb_logging: true  # Whether to use Weights & Biases logging
 
 # Resources

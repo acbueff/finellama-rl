@@ -1,13 +1,13 @@
-# FineMath model configuration
+# Qwen2.5 3B model configuration
 
 # Model identification
-model_name_or_path: "SunnyLin/Qwen2.5-7B-DPO-VP"  # Using Qwen2.5 model
+model_name_or_path: "Qwen/Qwen2.5-3B"  # Official Qwen2.5 3B model - DO NOT change to 7B
 model_type: "qwen"
 use_auth_token: true  # Use token for access
 
 # Model parameters
-max_length: 2048  # Maximum sequence length
-generation_max_length: 512  # Maximum generation length for inference
+max_length: 1024  # Reduced from 2048 to 1024 to save memory
+generation_max_length: 384  # Reduced from 512 to 384
 pad_token_id: 0
 eos_token_id: 1
 use_fast_tokenizer: true
@@ -16,6 +16,7 @@ use_fast_tokenizer: true
 bf16: true  # Use bfloat16 precision if available
 fp16: false  # Use fp16 precision if bf16 is not available
 gradient_checkpointing: true  # Enable gradient checkpointing to save memory
+low_cpu_mem_usage: true  # Added to reduce CPU memory usage
 
 # Quantization and efficiency settings
 load_in_8bit: false  # Whether to load model in 8-bit precision
@@ -26,8 +27,8 @@ use_peft: true  # Whether to use Parameter-Efficient Fine-Tuning
 peft_config:
   peft_type: "lora"  # LoRA adapter type
   task_type: "CAUSAL_LM"
-  r: 16  # LoRA attention dimension
-  lora_alpha: 32  # LoRA alpha parameter
+  r: 8  # Reduced from 16 to 8 to save memory
+  lora_alpha: 16  # Reduced from 32 to 16
   lora_dropout: 0.05  # Dropout probability for LoRA layers
   target_modules: ["q_proj", "v_proj", "k_proj", "o_proj"]  # Modules to apply LoRA to
   bias: "none"  # Whether to train bias parameters
@@ -44,4 +45,8 @@ repetition_penalty: 1.1
 trust_remote_code: true  # Needed for Qwen models
 
 # Specialized for math
-math_special_tokens: true  # Enable special tokens for math operations 
+math_special_tokens: true  # Enable special tokens for math operations
+
+# Memory optimization
+attn_implementation: "flash_attention_2"  # Added to use FlashAttention-2 if available
+use_cache: false  # Disable KV-cache during training to save memory 

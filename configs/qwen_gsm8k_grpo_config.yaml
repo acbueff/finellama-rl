@@ -1,0 +1,88 @@
+# GRPO Training Configuration for Qwen2.5 3B on GSM8K
+
+# Training parameters
+seed: 42
+num_epochs: 2  # Further reduced to ensure training completes
+max_steps: 2000  # Reduced steps to ensure training completes within time limit
+mini_batch_size: 2  # Further reduced batch size to minimize memory usage
+batch_size: 2  # Further reduced batch size to minimize memory usage
+gradient_accumulation_steps: 32  # Increased to compensate for smaller batch size
+learning_rate: 2.0e-5  # Slightly higher learning rate
+max_grad_norm: 1.0
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_epsilon: 1.0e-8
+weight_decay: 0.01
+warmup_steps: 50  # Reduced warmup steps
+lr_scheduler_type: "cosine"
+save_interval: 50  # Save checkpoints more frequently
+eval_interval: 200  # Evaluate less frequently to save time
+log_interval: 5  # Log more frequently for monitoring
+
+# GRPO specific parameters
+grpo_epochs: 1  # Reduced to single epoch per batch to save computation
+preference_threshold: 0.1  # Threshold for preference confidence
+beta: 0.1  # Regularization coefficient for GRPO
+use_preference_model: false  # Disabled preference model to save computation
+preference_model_type: "distilbert-base"  # Smaller model to save memory
+preference_model_lr: 5.0e-5  # Learning rate for preference model
+preference_model_steps: 4  # Further reduced
+preference_model_batch_size: 4  # Further reduced
+use_rejection_sampling: false  # Disabled to reduce computation
+max_rejections: 1  # Set to minimum
+
+# Paired sampling parameters
+num_sample_pairs: 8  # Drastically reduced from 32 to 8 for faster generation
+paired_batch_size: 4  # Further reduced from 8 to 4
+paired_temperature: 0.8  # Slightly reduced for more focused sampling
+paired_top_p: 0.92  # Slightly reduced
+paired_top_k: 25  # Reduced from 50 to 25
+preference_margin: 0.05  # Minimum margin for considering a preference significant
+
+# Generation parameters for paired samples
+prompt_max_length: 256  # Further reduced from 384 to 256
+response_max_length: 256  # Further reduced from 384 to 256
+temperature: 0.8  # Reduced from 1.0 to 0.8
+top_p: 0.92  # Slightly reduced from 1.0
+do_sample: true  # Whether to use sampling
+generation_timeout: 30  # Add timeout in seconds for generation to prevent hanging
+max_generation_attempts: 3  # Limit generation retries
+
+# Reward parameters (used for preference labeling)
+math_correctness_weight: 1.0  # Weight for mathematical correctness reward
+process_weight: 0.5  # Weight for reasoning process reward
+brevity_weight: 0.1  # Weight for brevity reward
+use_reference_kl: true  # Use KL divergence from reference model as penalty
+kl_penalty_weight: 0.05  # Weight for reference KL penalty
+max_length_penalty: 0.001  # Penalty per token beyond optimal length
+
+# Diversity parameters
+diversity_coefficient: 0.0  # Disabled diversity to save computation
+max_diversity_metric: "cosine"  # Metric to use for measuring diversity
+min_token_difference: 5  # Reduced from 10 to 5
+
+# Model settings (explicitly specify the 3B model)
+model_name_or_path: "Qwen/Qwen2.5-3B"  # Use 3B model explicitly
+use_peft: true
+load_in_4bit: true
+attn_implementation: "flash_attention_2"  # Use FlashAttention-2
+use_cache: false  # Disable KV-cache to save memory
+
+# Performance and monitoring options
+save_optimizer_state: false  # Don't save optimizer state to reduce checkpoint size
+save_zero_checkpoint: true  # Force saving at step 0 to verify checkpoint mechanism
+incremental_checkpointing: true  # Enable saving progress even if interrupted
+detailed_logging: true  # Enable more verbose logging
+use_flash_generation: true  # Use optimized generation where possible
+early_stopping_patience: 5  # Add early stopping to avoid wasting time on non-improving runs
+progression_metrics_interval: 10  # Log progression metrics more frequently
+
+# Output directories - ensure consistency with run script
+output_dir: "/proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/models/grpo_finetuned"
+tensorboard_dir: "/proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/results/grpo/tensorboard"
+checkpoint_dir: "/proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/models/grpo_finetuned/checkpoints"
+progress_dir: "/proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/models/grpo_finetuned/progress"
+wandb_logging: false  # Disabled to simplify training
+
+# Resources
+num_workers: 2  # Reduced from 4 to 2 to minimize resource contention 
