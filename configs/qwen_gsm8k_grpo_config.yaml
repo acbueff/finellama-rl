@@ -45,7 +45,7 @@ response_max_length: 256  # Further reduced from 384 to 256
 temperature: 0.8  # Reduced from 1.0 to 0.8
 top_p: 0.92  # Slightly reduced from 1.0
 do_sample: true  # Whether to use sampling
-generation_timeout: 30  # Add timeout in seconds for generation to prevent hanging
+generation_timeout: 180  # 3 minutes timeout per generation to prevent hanging
 max_generation_attempts: 3  # Limit generation retries
 
 # Reward parameters (used for preference labeling)

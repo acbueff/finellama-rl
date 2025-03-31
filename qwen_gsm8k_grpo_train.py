@@ -146,7 +146,8 @@ def generate_response_pairs(
     config: Dict[str, Any]
 ) -> List[Tuple[str, str]]:
     """
-    Generate pairs of responses for a given prompt with timeout protection.
+    Generate pairs of responses for a given prompt using proper GRPO approach.
+    With enhanced timeout handling, reduced parallelism, and detailed debugging.
     
     Args:
         model: Model to generate responses
@@ -158,12 +159,19 @@ def generate_response_pairs(
     Returns:
         List of (response_a, response_b) tuples
     """
-    num_pairs = config.get("num_sample_pairs", 8)  # Use reduced sample pairs from config
-    max_new_tokens = config.get("response_max_length", 256)  # Use reduced response length
-    temperature = config.get("paired_temperature", 0.8)
-    top_p = config.get("paired_top_p", 0.92)
-    top_k = config.get("paired_top_k", 25)
-    do_sample = config.get("do_sample", True)
+    start_time = time.time()
+    num_pairs = config.get("num_sample_pairs", 8)
+    
+    # Further reduce sample pairs for faster completion
+    if config.get("generation_optimization", {}).get("ultra_fast_sampling_params", False):
+        num_pairs = min(num_pairs, 4)  # Reduce sample pairs to at most 4
+        logger.info(f"Reduced sample pairs to {num_pairs} for ultra-fast mode")
+    
+    # IMPROVEMENT 3: Simplified generation parameters
+    max_new_tokens = config.get("response_max_length", 128)  # Reduced from 256 to 128
+    temperature = config.get("paired_temperature", 0.7)  # Reduced from 0.8 to 0.7
+    top_p = config.get("paired_top_p", 0.85)  # Reduced from 0.92 to 0.85
+    top_k = config.get("paired_top_k", 20)  # Reduced from 25 to 20
     
     # Check for ultra-fast sampling configuration
     if config.get("generation_optimization", {}).get("ultra_fast_sampling_params", False):
@@ -171,15 +179,11 @@ def generate_response_pairs(
         temperature = 0.5
         top_p = 0.7
         top_k = 10
-        max_new_tokens = min(max_new_tokens, 128)  # Limit response length
+        max_new_tokens = min(max_new_tokens, 64)  # Further reduced from 128 to 64
     
-    # Check for very short generation configuration
-    if config.get("generation_optimization", {}).get("very_short_generation", False):
-        logger.info("Using very short generation")
-        max_new_tokens = min(max_new_tokens, 64)  # Drastically limit response length
-    
-    # Get generation timeout from config or environment variable
-    generation_timeout = config.get("generation_timeout", 30)
+    # IMPROVEMENT 1: Longer generation timeout
+    # Get generation timeout from config or environment variable with increased default
+    generation_timeout = config.get("generation_timeout", 180)  # Set to exactly 3 minutes (180 seconds) per generation
     if "GENERATION_TIMEOUT_SECONDS" in os.environ:
         try:
             generation_timeout = int(os.environ["GENERATION_TIMEOUT_SECONDS"])
@@ -187,154 +191,177 @@ def generate_response_pairs(
         except ValueError:
             logger.warning(f"Invalid GENERATION_TIMEOUT_SECONDS value: {os.environ['GENERATION_TIMEOUT_SECONDS']}")
     
-    max_attempts = config.get("max_generation_attempts", 3)
-    
     # Generate full prompt
     full_prompt = create_prompt(prompt)
     inputs = tokenizer(full_prompt, return_tensors="pt").to(model.device)
     
-    # Function for timeout handling
-    def generate_with_timeout(batch_size=4, sampling=True, temp=temperature):
+    # IMPROVEMENT 4: More detailed logging
+    logger.info(f"Starting response generation for problem prompt: '{prompt[:50]}...'")
+    logger.info(f"Target answer: {target_answer}")
+    logger.info(f"Generation parameters: temp={temperature}, top_p={top_p}, top_k={top_k}, max_tokens={max_new_tokens}")
+    logger.info(f"Timeout: {generation_timeout}s, Pairs needed: {num_pairs}")
+    
+    # Generate responses with sampling (not greedy!) for diversity
+    all_responses = []
+    generation_stats = {"success": 0, "timeout": 0, "error": 0, "duration": []}
+    
+    # Function to generate a single response with sampling
+    def generate_single_response(index, temp=temperature, top_p_val=top_p, max_tokens=max_new_tokens):
+        gen_start = time.time()
+        logger.info(f"Starting generation {index+1} with temp={temp:.2f}, top_p={top_p_val:.2f}")
         try:
-            # Use a smaller number of sequences per call to prevent memory issues
-            curr_batch_size = min(batch_size, 2*num_pairs)
-            
-            # Clone inputs for this batch to avoid reference issues
-            batch_inputs = {
-                "input_ids": inputs.input_ids.repeat(curr_batch_size, 1),
-                "attention_mask": inputs.attention_mask.repeat(curr_batch_size, 1)
-            }
-            
-            start_time = time.time()
-            logger.info(f"Starting generation with batch_size={curr_batch_size}, sampling={sampling}, temp={temp}")
-            
             with torch.no_grad():
-                outputs = model.generate(
-                    **batch_inputs,
-                    max_new_tokens=max_new_tokens,
-                    do_sample=sampling,
+                output = model.generate(
+                    input_ids=inputs.input_ids,
+                    attention_mask=inputs.attention_mask,
+                    max_new_tokens=max_tokens,
+                    do_sample=True,  # Critical for GRPO: must use sampling!
                     temperature=temp,
-                    top_p=top_p if sampling else 1.0,
-                    top_k=top_k if sampling else 0,
-                    num_return_sequences=curr_batch_size,
-                    pad_token_id=tokenizer.eos_token_id
-                )
-            
-            generation_time = time.time() - start_time
-            logger.info(f"Generation completed in {generation_time:.2f}s")
-            
-            # Process outputs
-            responses = []
-            for output in outputs:
-                try:
-                    response_ids = output[inputs.input_ids.shape[1]:]
-                    response_text = tokenizer.decode(response_ids, skip_special_tokens=True)
-                    responses.append(response_text.strip())
-                except Exception as e:
-                    logger.error(f"Error decoding response: {str(e)}")
-            
-            return responses
-            
+                    top_p=top_p_val,
+                    top_k=top_k,
+                    pad_token_id=tokenizer.eos_token_id,
+                    num_return_sequences=1  # Always use 1 to avoid the greedy generation error
+                )[0]
+                
+                response_ids = output[inputs.input_ids.shape[1]:]
+                response_text = tokenizer.decode(response_ids, skip_special_tokens=True)
+                gen_duration = time.time() - gen_start
+                logger.info(f"Generation {index+1} completed in {gen_duration:.2f}s, length: {len(response_text)} chars")
+                
+                generation_stats["success"] += 1
+                generation_stats["duration"].append(gen_duration)
+                
+                return response_text.strip()
         except Exception as e:
-            logger.error(f"Error during generation: {str(e)}")
-            return []
+            gen_duration = time.time() - gen_start
+            logger.error(f"Error generating response {index+1} after {gen_duration:.2f}s: {str(e)}")
+            generation_stats["error"] += 1
+            return None
     
-    # Use ThreadPoolExecutor for timeout handling
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        responses = []
-        attempts = 0
-        timeout_count = 0
+    # IMPROVEMENT 2: Reduced parallel generation
+    # Use ThreadPoolExecutor with fewer workers
+    with ThreadPoolExecutor(max_workers=2) as executor:  # Reduced from 4 to 2 workers
+        # Generate responses in parallel with timeout
+        futures = []
         
-        while len(responses) < num_pairs * 2 and attempts < max_attempts:
-            attempts += 1
-            logger.info(f"Generation attempt {attempts}/{max_attempts}")
+        # Target: Generate at least 2*num_pairs responses (we need pairs)
+        num_attempts = min(2*num_pairs, 12)  # Reduced from 16 to 12 max attempts
+        logger.info(f"Attempting {num_attempts} parallel generations with 2 workers")
+        
+        for i in range(num_attempts):
+            # Submit generation task with slight temperature variations for diversity
+            temp_variation = temperature * (0.9 + 0.2 * random.random())  # ±10% variation
+            top_p_variation = min(0.95, top_p * (0.95 + 0.1 * random.random()))  # slight variation
             
-            # Decide if we need to switch to simpler generation
-            use_simple = (timeout_count >= 1 or 
-                         config.get("generation_optimization", {}).get("simple_greedy_if_timeout", False))
-            
+            future = executor.submit(
+                generate_single_response,
+                i,  # Pass index for better logging 
+                temp=temp_variation, 
+                top_p_val=top_p_variation,
+                max_tokens=max_new_tokens
+            )
+            futures.append(future)
+        
+        # Collect results with timeout handling
+        for future_idx, future in enumerate(as_completed(futures, timeout=generation_timeout)):
             try:
-                # First try: use normal sampling
-                if not use_simple:
-                    # Submit generation task with timeout
-                    future = executor.submit(generate_with_timeout, 
-                                           batch_size=4, 
-                                           sampling=True,
-                                           temp=temperature)
-                    batch_responses = future.result(timeout=generation_timeout)
-                    responses.extend(batch_responses)
-                    
-                # If we didn't get enough responses, try greedy generation
-                if len(responses) < num_pairs * 2:
-                    # Fallback to greedy generation
-                    logger.info("Using greedy generation as fallback")
-                    future = executor.submit(generate_with_timeout, 
-                                          batch_size=2, 
-                                          sampling=False,
-                                          temp=1.0)  # Temp doesn't matter for greedy
-                    batch_responses = future.result(timeout=generation_timeout)
-                    responses.extend(batch_responses)
-                    
-                # If we still don't have enough, add some simple responses
-                if len(responses) < num_pairs * 2:
-                    logger.warning("Adding basic responses to complete set")
-                    responses.append(f"The answer is {target_answer}.")
-                    responses.append("I'll solve this step by step.")
-                    responses.append(f"After calculating, I get {target_answer}.")
-                    responses.append("Let me think through this problem carefully.")
-                
+                result = future.result()
+                if result:
+                    all_responses.append(result)
+                    # IMPROVEMENT 4: More detailed logging
+                    logger.info(f"Collected response {future_idx+1}/{num_attempts}, total so far: {len(all_responses)}")
             except TimeoutError:
-                logger.warning(f"Generation timed out after {generation_timeout}s")
-                timeout_count += 1
-                
-                # Try with simpler parameters on next attempt
-                temperature = max(0.1, temperature * 0.7)
-                top_p = max(0.5, top_p * 0.8)
-                max_new_tokens = max(32, max_new_tokens // 2)
-                
-                # Add some basic responses so we don't get stuck
-                if timeout_count >= 2:
-                    logger.warning("Adding basic responses after timeout")
-                    responses.append(f"The answer is {target_answer}.")
-                    responses.append("I'll solve this step by step.")
-                    responses.append(f"After calculating, I get {target_answer}.")
-                    responses.append("Let me think through this problem carefully.")
-                
+                logger.warning(f"Generation timeout after {generation_timeout}s for future {future_idx+1}")
+                generation_stats["timeout"] += 1
             except Exception as e:
-                logger.error(f"Generation error: {str(e)}")
-                # Add basic responses on error
-                responses.append(f"The answer is {target_answer}.")
-                responses.append("I'll solve this step by step.")
+                logger.error(f"Error in response generation {future_idx+1}: {str(e)}")
+                generation_stats["error"] += 1
     
-    # Deduplicate responses and handle edge cases
+    # IMPROVEMENT 4: Log generation statistics
+    if generation_stats["duration"]:
+        avg_duration = sum(generation_stats["duration"]) / len(generation_stats["duration"])
+        logger.info(f"Generation stats: {generation_stats['success']} successes, {generation_stats['timeout']} timeouts, " 
+                   f"{generation_stats['error']} errors, avg time: {avg_duration:.2f}s")
+    else:
+        logger.warning("No successful generations completed! All attempts failed.")
+    
+    logger.info(f"Generated {len(all_responses)} initial responses")
+    
+    # If we didn't get enough responses, try sequential generation with even simpler parameters
+    if len(all_responses) < num_pairs * 2:
+        logger.info(f"Not enough responses ({len(all_responses)}), trying sequential generation with simpler parameters")
+        
+        # Even simpler parameters for sequential generation
+        seq_temp = 0.3  # Very low temperature
+        seq_top_p = 0.5  # Very conservative top_p
+        seq_max_tokens = 32  # Very short responses
+        
+        # Try sequential generation for remaining needed responses
+        remaining = (num_pairs * 2) - len(all_responses)
+        for i in range(min(remaining, 4)):  # Limit to 4 additional attempts
+            try:
+                logger.info(f"Sequential generation attempt {i+1}/{min(remaining, 4)}")
+                result = generate_single_response(
+                    i + num_attempts,
+                    temp=seq_temp,
+                    top_p_val=seq_top_p,
+                    max_tokens=seq_max_tokens
+                )
+                if result:
+                    all_responses.append(result)
+            except Exception as e:
+                logger.error(f"Sequential generation failed: {str(e)}")
+    
+    # Deduplicate responses
     unique_responses = []
-    for resp in responses:
+    for resp in all_responses:
         if resp and resp not in unique_responses:
             unique_responses.append(resp)
     
     logger.info(f"Generated {len(unique_responses)} unique responses after deduplication")
     
-    # If we have fewer than 2 responses, create basic responses
-    if len(unique_responses) < 2:
-        logger.warning("Insufficient responses generated, creating fallback responses")
-        unique_responses.append("I'll solve this step by step.")
-        unique_responses.append(f"The answer is {target_answer}.")
-    
-    # Form pairs - ensuring we don't exceed the number of available responses
+    # Form pairs - ensuring we have valid response pairs
     pairs = []
-    for i in range(min(num_pairs, len(unique_responses) // 2)):
-        pair = (unique_responses[2*i], unique_responses[2*i+1])
-        pairs.append(pair)
     
-    # If we don't have enough pairs, but have some responses, create additional pairs
+    # First try to create pairs from unique responses
+    if len(unique_responses) >= 2:
+        # Shuffle to ensure randomness
+        random.shuffle(unique_responses)
+        
+        # Form pairs from consecutive responses
+        for i in range(0, len(unique_responses) - 1, 2):
+            if i+1 < len(unique_responses):
+                pairs.append((unique_responses[i], unique_responses[i+1]))
+                
+                # If we have enough pairs, break
+                if len(pairs) >= num_pairs:
+                    break
+    
+    # If we don't have enough pairs but have responses, create additional pairs
     while len(pairs) < num_pairs and len(unique_responses) >= 2:
-        # Randomly sample two different responses
-        idxs = random.sample(range(len(unique_responses)), 2)
-        pair = (unique_responses[idxs[0]], unique_responses[idxs[1]])
-        pairs.append(pair)
+        idx1, idx2 = random.sample(range(len(unique_responses)), 2)
+        pairs.append((unique_responses[idx1], unique_responses[idx2]))
     
-    # Return what we have, even if fewer than requested
-    logger.info(f"Returning {len(pairs)} response pairs")
+    # As an absolute last resort, use minimal template responses (should be rare)
+    if len(pairs) == 0:
+        logger.warning("No valid responses generated, creating fallback response pairs as last resort")
+        # At least provide a minimal number of different template responses
+        template_responses = [
+            f"The answer is {target_answer}.",
+            "I'll solve this step by step.",
+            f"After calculating, I get {target_answer}.",
+            "Let me think through this problem carefully."
+        ]
+        
+        # Create pairs from templates
+        for i in range(min(num_pairs, 2)):  # Limit to 2 pairs from templates
+            idx1, idx2 = random.sample(range(len(template_responses)), 2)
+            pairs.append((template_responses[idx1], template_responses[idx2]))
+    
+    # IMPROVEMENT 4: Detailed completion logging
+    total_time = time.time() - start_time
+    logger.info(f"Response generation complete in {total_time:.2f}s. Returning {len(pairs)} response pairs for GRPO.")
+    
     return pairs
 
 def compute_preferences(
