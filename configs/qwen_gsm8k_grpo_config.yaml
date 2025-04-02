@@ -32,21 +32,29 @@ use_rejection_sampling: false  # Disabled to reduce computation
 max_rejections: 1  # Set to minimum
 
 # Paired sampling parameters
-num_sample_pairs: 8  # Drastically reduced from 32 to 8 for faster generation
-paired_batch_size: 4  # Further reduced from 8 to 4
-paired_temperature: 0.8  # Slightly reduced for more focused sampling
-paired_top_p: 0.92  # Slightly reduced
-paired_top_k: 25  # Reduced from 50 to 25
+num_sample_pairs: 4  # Reduced from 8 to 4 for faster generation
+paired_batch_size: 2  # Reduced from 4 to 2
+paired_temperature: 0.7  # Further reduced for more focused sampling
+paired_top_p: 0.9  # Slightly reduced
+paired_top_k: 20  # Reduced from 25 to 20
+temperature_range: [0.4, 0.8]  # Range for temperature variation
 preference_margin: 0.05  # Minimum margin for considering a preference significant
 
 # Generation parameters for paired samples
 prompt_max_length: 256  # Further reduced from 384 to 256
-response_max_length: 256  # Further reduced from 384 to 256
-temperature: 0.8  # Reduced from 1.0 to 0.8
-top_p: 0.92  # Slightly reduced from 1.0
+response_max_length: 128  # Reduced from 256 to 128
+temperature: 0.7  # Reduced from 0.8 to 0.7
+top_p: 0.9  # Slightly reduced from 0.92
 do_sample: true  # Whether to use sampling
 generation_timeout: 180  # 3 minutes timeout per generation to prevent hanging
 max_generation_attempts: 3  # Limit generation retries
+
+# Fallback options for generation
+fallback_generation:
+  enable_temperature_variation: true  # Enable temperature variation for retry
+  enable_greedy_fallback: true  # Enable fallback to greedy generation
+  enable_template_fallback: true  # Enable fallback to template responses
+  max_fallback_attempts: 2  # Maximum number of fallback attempts
 
 # Reward parameters (used for preference labeling)
 math_correctness_weight: 1.0  # Weight for mathematical correctness reward

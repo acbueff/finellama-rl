@@ -3,9 +3,9 @@
 #SBATCH --gpus=1 -C "fat"          # Request 1 GPU on fat partition for 80GB VRAM
 #SBATCH --mem=0                     # Request all available memory on the node
 #SBATCH -t 0-72:00:00              # Increase maximum runtime to 72 hours
-#SBATCH -J qwen_gsm8k_grpo         # Job name
-#SBATCH -o logs/qwen_gsm8k_grpo_%j.out  # Standard output log
-#SBATCH -e logs/qwen_gsm8k_grpo_%j.err  # Standard error log
+#SBATCH -J improved_grpo         # Job name
+#SBATCH -o logs/improved_grpo_%j.out  # Standard output log
+#SBATCH -e logs/improved_grpo_%j.err  # Standard error log
 
 # Source environment variables if .env file exists
 if [ -f "$(dirname "$0")/.env" ]; then
@@ -34,60 +34,20 @@ export PYTORCH_NO_CUDA_MEMORY_CACHING=1
 export GENERATION_TIMEOUT_SECONDS=180  # Set to exactly 3 minutes (180 seconds) per generation
 
 # Create all output directories with detailed structure
-mkdir -p /proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/models/grpo_finetuned/checkpoints
-mkdir -p /proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/models/grpo_finetuned/progress
-mkdir -p /proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/results/grpo/logs
-mkdir -p /proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/results/grpo/tensorboard
+mkdir -p /proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/models/grpo_finetuned_improved/checkpoints
+mkdir -p /proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/models/grpo_finetuned_improved/progress
+mkdir -p /proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/results/grpo_improved/logs
+mkdir -p /proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/results/grpo_improved/tensorboard
 mkdir -p logs
 
 # Create more detailed temporary config file with better optimization settings
-TEMP_CONFIG="/tmp/qwen_gsm8k_grpo_config_optimized.yaml"
+TEMP_CONFIG="/tmp/qwen_gsm8k_grpo_config_improved.yaml"
 cp configs/qwen_gsm8k_grpo_config.yaml $TEMP_CONFIG
 
-# Modify config to be even more aggressive with timeouts and generation parameters
-cat << EOF >> $TEMP_CONFIG
-
-# Additional optimization settings added by run script
-optimizer_config:
-  offload_optimizer: true
-  offload_param: true
-  overlap_comm: true
-  contiguous_gradients: true
-  sub_group_size: 1e5
-  reduce_bucket_size: 1e5
-  stage3_prefetch_bucket_size: 1e5
-  stage3_param_persistence_threshold: 1e5
-  allgather_bucket_size: 1e5
-  reduce_scatter: true
-
-# Enhanced generation settings to avoid timeouts
-generation_optimization:
-  micro_batch_size: 1
-  very_short_generation: true
-  force_recompute_attn: false
-  min_response_tokens: 16
-  max_response_tokens: 64  # Further reduced from 128
-  ultra_fast_sampling_params: true
-  simple_greedy_if_timeout: true
-  sequential_fallback: true
-  prioritize_completion: true  # Ensure we complete a minimum number of generations
-  detailed_logging: true  # Enable more verbose logging
-  
-# Reduced training dimensions to ensure progress
-training_optimization:
-  reduced_sample_pairs: true  # Use fewer sample pairs
-  max_pairs_per_problem: 4   # Maximum 4 pairs per problem (down from 8)
-  reduced_minibatch: true    # Use smaller minibatches for processing
-  aggressive_response_pruning: true  # Prune long responses quickly
-  prioritize_training_steps: true    # Focus on making training progress over perfect generation
-EOF
-
-echo "Created optimized config at $TEMP_CONFIG with enhanced generation settings"
-
-# Setup enhanced monitoring script to run in background
+# Set up custom monitor with improved error detection
 echo "Setting up enhanced monitoring..."
 (
-  MONITOR_LOG="logs/grpo_monitoring_$(date +%Y%m%d).log"
+  MONITOR_LOG="logs/improved_grpo_monitoring_$(date +%Y%m%d).log"
   echo "Starting enhanced monitoring at $(date)" > $MONITOR_LOG
   echo "Job ID: $SLURM_JOB_ID, Node: $SLURMD_NODENAME" >> $MONITOR_LOG
   echo "---------------------------------------" >> $MONITOR_LOG
@@ -110,25 +70,56 @@ echo "Setting up enhanced monitoring..."
     fi
   }
   
+  # Function to check progress metrics
+  check_progress_metrics() {
+    local progress_file="/proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/models/grpo_finetuned_improved/progress/training_progress.json"
+    if [ -f "$progress_file" ]; then
+      echo "Progress file contents:" >> $MONITOR_LOG
+      cat $progress_file >> $MONITOR_LOG
+      
+      # Extract step from progress file
+      STEP=$(grep -o '"step": [0-9]*' $progress_file | awk '{print $2}')
+      if [ -n "$STEP" ] && [ "$STEP" -gt "0" ]; then
+        echo "Training has progressed to step $STEP" >> $MONITOR_LOG
+      else
+        echo "Warning: Training is still at step 0" >> $MONITOR_LOG
+      fi
+    else
+      echo "Progress file not found: $progress_file" >> $MONITOR_LOG
+    fi
+  }
+  
+  # Check for checkpoints
+  check_checkpoints() {
+    local checkpoint_dir="/proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/models/grpo_finetuned_improved/checkpoints"
+    echo "Checkpoint directory content:" >> $MONITOR_LOG
+    ls -la $checkpoint_dir 2>/dev/null >> $MONITOR_LOG || echo "No checkpoints found" >> $MONITOR_LOG
+  }
+  
   # Function to check log file
   check_log_progress() {
-    local logfile="logs/qwen_gsm8k_grpo_${SLURM_JOB_ID}.out"
+    local logfile="logs/improved_grpo_${SLURM_JOB_ID}.out"
     if [ -f "$logfile" ]; then
       echo "Recent log entries:" >> $MONITOR_LOG
       tail -n 10 $logfile >> $MONITOR_LOG
       
-      # Check for errors
+      # Check for errors and progress
       ERROR_COUNT=$(grep -c "ERROR" $logfile)
       TIMEOUT_COUNT=$(grep -c "timeout" $logfile)
-      PROGRESS_COUNT=$(grep -c "step [0-9]" $logfile)
+      PROGRESS_COUNT=$(grep -c "global step" $logfile)
+      GENERATION_COUNT=$(grep -c "Generated .* pairs" $logfile)
       
-      echo "Log stats - Errors: $ERROR_COUNT, Timeouts: $TIMEOUT_COUNT, Progress markers: $PROGRESS_COUNT" >> $MONITOR_LOG
+      echo "Log stats - Errors: $ERROR_COUNT, Timeouts: $TIMEOUT_COUNT, Progress markers: $PROGRESS_COUNT, Generations: $GENERATION_COUNT" >> $MONITOR_LOG
+      
+      # Check if we seem to be making progress
+      LAST_STEP_LOG=$(grep "global step" $logfile | tail -n 1)
+      echo "Latest step info: $LAST_STEP_LOG" >> $MONITOR_LOG
     else
       echo "Log file not found: $logfile" >> $MONITOR_LOG
     fi
   }
   
-  # Monitor the job every 3 minutes (reduced from 5 minutes)
+  # Monitor the job every 3 minutes
   while true; do
     echo "===== $(date) =====" >> $MONITOR_LOG
     
@@ -143,12 +134,14 @@ echo "Setting up enhanced monitoring..."
       echo "GRPO training process not found!" >> $MONITOR_LOG
     fi
     
+    # Check progress metrics
+    check_progress_metrics
+    
+    # Check for checkpoints
+    check_checkpoints
+    
     # Check log progress
     check_log_progress
-    
-    # Check for output files
-    echo "Output files:" >> $MONITOR_LOG
-    ls -la /proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/models/grpo_finetuned/checkpoint-* 2>/dev/null | wc -l >> $MONITOR_LOG
     
     echo "---" >> $MONITOR_LOG
     sleep 180  # Monitor every 3 minutes
@@ -161,13 +154,13 @@ APPTAINER_ENV="/proj/berzelius-aiics-real/users/x_anbue/env.sif"
 
 # Define paths
 MODEL_CONFIG="configs/qwen2.5_3b_config.yaml"
-GRPO_CONFIG=$TEMP_CONFIG  # Use our optimized config
+GRPO_CONFIG=$TEMP_CONFIG  # Use our improved config
 TRAIN_DATA="/proj/berzelius-aiics-real/users/x_anbue/finellama-data/gsm8k/gsm8k_train.json"
 EVAL_DATA="/proj/berzelius-aiics-real/users/x_anbue/finellama-data/gsm8k/gsm8k_val.json"
-OUTPUT_DIR="/proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/models/grpo_finetuned"
-RESULTS_DIR="/proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/results/grpo"
+OUTPUT_DIR="/proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/models/grpo_finetuned_improved"
+RESULTS_DIR="/proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/results/grpo_improved"
 
-echo "Starting GRPO training for Qwen2.5 3B on GSM8K"
+echo "Starting improved GRPO training for Qwen2.5 3B on GSM8K"
 echo "Model config: $MODEL_CONFIG"
 echo "GRPO config: $GRPO_CONFIG"
 echo "Training data: $TRAIN_DATA"
