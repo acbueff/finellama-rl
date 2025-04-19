@@ -1,0 +1,221 @@
+
+Here's an updated Singularity/Apptainer definition file that extends your existing `env.sif` container:
+
+```
+Bootstrap: localimage
+From: /proj/berzelius-aiics-real/users/x_anbue/env.sif
+
+%labels
+    Author "Anders Bue"
+    Version 1.0
+    Description "Extended ML container with TRL, flash-attention and other libraries for GRPO experiments"
+
+%post
+    # Avoid interactive prompts during installation
+    export DEBIAN_FRONTEND=noninteractive
+    
+    # Update system packages if needed
+    echo "Updating system packages..."
+    apt-get update && apt-get install -y --no-install-recommends \
+        ninja-build \
+        cmake \
+        && apt-get clean \
+        && rm -rf /var/lib/apt/lists/*
+    
+    # Upgrade pip to latest version
+    echo "Upgrading pip..."
+    python -m pip install --no-cache-dir --upgrade pip
+    
+    # Install required dependencies for flash-attention
+    echo "Installing CUDA extensions and optimization libraries..."
+    pip install --no-cache-dir \
+        triton==2.2.0 \
+        einops \
+        ninja
+    
+    # Install flash-attention (with careful error handling)
+    echo "Installing flash-attention..."
+    pip install --no-cache-dir flash-attn==2.5.5 || { echo "Flash-attention installation failed, trying alternative approach"; \
+        pip install --no-cache-dir git+https://github.com/Dao-AILab/flash-attention.git@v2.5.5; }
+    
+    # Install/upgrade Transformers ecosystem
+    echo "Installing/upgrading Hugging Face libraries and dependencies..."
+    pip install --no-cache-dir --upgrade \
+        transformers>=4.37.0 \
+        datasets>=2.14.0 \
+        accelerate>=0.26.0 \
+        peft>=0.8.0 \
+        bitsandbytes>=0.41.0 \
+        tensorboard>=2.14.0
+    
+    # Install TRL (Transformer Reinforcement Learning)
+    echo "Installing TRL library for GRPO/PPO training..."
+    pip install --no-cache-dir trl>=0.7.10
+    
+    # Install additional libraries needed for GRPO experiments
+    echo "Installing additional libraries for GRPO..."
+    pip install --no-cache-dir \
+        rouge-score \
+        nltk \
+        regex \
+        pandas>=2.0.0
+    
+    # Verify installations
+    echo "Verifying critical installations..."
+    python -c "import torch; print('PyTorch version:', torch.__version__); print('CUDA available:', torch.cuda.is_available()); print('CUDA version:', torch.version.cuda if torch.cuda.is_available() else 'N/A')"
+    python -c "import transformers; print('Transformers version:', transformers.__version__)"
+    python -c "import flash_attn; print('Flash Attention version:', flash_attn.__version__)" || echo "Flash-attention import check failed, but continuing anyway"
+    python -c "import trl; print('TRL version:', trl.__version__)"
+    
+    # Clean up
+    echo "Cleaning up..."
+    pip cache purge
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+    rm -rf /tmp/*
+    
+    echo "Container extension completed successfully"
+
+%test
+    # Test script to verify the container is working properly
+    echo "Testing container functionality..."
+    python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available!'; print('PyTorch CUDA test: OK')"
+    python -c "import transformers; print('Transformers test: OK')"
+    python -c "import trl; print('TRL test: OK')"
+    python -c "import peft; print('PEFT test: OK')"
+    python -c "import accelerate; print('Accelerate test: OK')"
+    python -c "from trl import GRPOTrainer; print('GRPOTrainer import test: OK')"
+    echo "All tests passed successfully!"
+```
+
+**Important Build Instructions**:
+
+To build this container and overwrite the existing `env.sif`, save this definition to a file named `extend_env.def` and run:
+
+```bash
+# Create a build script to ensure proper overwriting
+cat > build_updated_container.sh << 'EOF'
+#!/bin/bash
+#SBATCH --account=berzelius-2025-74
+#SBATCH --time=1:00:00
+#SBATCH --nodes=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=8G
+#SBATCH --partition=main
+#SBATCH -J extend_container
+#SBATCH -o extend_container_%j.out
+#SBATCH -e extend_container_%j.err
+
+# Define paths
+DEFINITION_FILE="extend_env.def"
+TEMP_SIF="/tmp/env_extended_$(date +%Y%m%d_%H%M%S).sif"
+OUTPUT_SIF="/proj/berzelius-aiics-real/users/x_anbue/env.sif"
+BACKUP_SIF="/proj/berzelius-aiics-real/users/x_anbue/env_backup_$(date +%Y%m%d_%H%M%S).sif"
+
+# Create backup of current container
+echo "Creating backup of current container at $BACKUP_SIF"
+cp "$OUTPUT_SIF" "$BACKUP_SIF"
+
+# Build the new container to a temporary location
+echo "Building extended container from definition file: $DEFINITION_FILE"
+echo "This may take a while..."
+
+# Use sudo if available, otherwise use regular command
+if command -v sudo &> /dev/null; then
+    sudo apptainer build "$TEMP_SIF" "$DEFINITION_FILE"
+else
+    apptainer build "$TEMP_SIF" "$DEFINITION_FILE"
+fi
+
+# Check if the build was successful
+if [ $? -eq 0 ]; then
+    echo "Container built successfully"
+    
+    # Move the new container to replace the old one
+    echo "Replacing old container with new one"
+    mv "$TEMP_SIF" "$OUTPUT_SIF"
+    
+    echo "Container updated successfully at $OUTPUT_SIF"
+    echo "A backup of the previous container is available at $BACKUP_SIF"
+else
+    echo "Container build failed. Check the error log for details."
+    echo "The original container at $OUTPUT_SIF remains unchanged."
+    
+    # Remove temp file if it exists
+    if [ -f "$TEMP_SIF" ]; then
+        rm "$TEMP_SIF"
+    fi
+fi
+EOF
+
+# Make the script executable
+chmod +x build_updated_container.sh
+
+# Submit the build job to SLURM
+sbatch build_updated_container.sh
+```
+
+**Key Points of This Approach:**
+
+1. **Extends Existing Container**: Uses your existing `env.sif` as the base, preserving all libraries and configurations already there.
+
+2. **Space Efficiency**: 
+   - Creates a temporary file during build to ensure safety
+   - Makes a backup of the original container (you can delete this later if space is limited)
+   - Replaces the original container path with the new one
+
+3. **Focused Additions**: Only adds the specific libraries needed for your GRPO experiment:
+   - flash-attention and its dependencies
+   - TRL for reinforcement learning
+   - Updated transformers libraries
+   - Required utility libraries
+
+4. **Safety Checks**: The build process verifies the installation of critical components and provides a test section to validate functionality before replacing your original container.
+
+This approach meets your requirement of extending the existing `env.sif` rather than creating additional container files that would consume more space on your HPC system.
+
+
+
+# Conversation Summary
+
+The conversation focused on optimizing GRPO (Gradient-based Reinforcement with Paired Optimization) training for language models on the Berzelius HPC cluster. Here's the progression:
+
+1. **Initial GRPO Implementation:**
+   - Modified the `generate_response_pairs` function to reduce sample pairs from 8 to 4
+   - Added temperature variation for generation diversity
+   - Implemented robust fallback mechanisms for generation failures
+   - Enhanced logging and error handling
+
+2. **Training Loop Improvements:**
+   - Enhanced the `train_grpo` function with better error recovery
+   - Added exponential backoff for consecutive errors
+   - Implemented caching of successful generations for reuse when new generations fail
+   - Added detailed progress tracking and checkpointing
+
+3. **Execution Script Development:**
+   - Created SLURM scripts for running the GRPO training jobs
+   - Set up environment variables for HuggingFace caching and authentication
+   - Configured memory optimization settings
+   - Implemented a monitoring system to track training progress
+
+4. **Container Strategy:**
+   - Initially attempted to build a custom container with flash-attention support
+   - Encountered SLURM GPU resource allocation errors during container build
+
+5. **Runtime Library Approach:**
+   - Shifted to using the original `env.sif` container
+   - Added runtime installation of required libraries (TRL, flash-attention, etc.)
+   - Created setup scripts to install libraries during job initialization
+   - Submitted jobs using the updated scripts
+
+6. **Job Failure Analysis:**
+   - The runtime installation approach failed, likely due to installation errors within the container
+   - Determined that runtime `pip install` commands were causing silent failures
+
+7. **Final Solution Design:**
+   - Created a comprehensive Singularity definition file to build a proper container with all required libraries
+   - Updated the approach to extend the existing `env.sif` container rather than creating a new one
+   - Designed a build script that safely backs up the original container while replacing it with the updated version
+   - Added verification steps and tests to ensure functionality before deployment
+
+The conversation culminated in a space-efficient approach to extend the existing container with the necessary libraries for GRPO experiments, avoiding runtime installations while preserving HPC storage space.

@@ -1,0 +1,9 @@
+Bootstrap: localimage
+From: /apps/containers/Conda/miniconda-23.10.0-1.sif
+
+%files
+    ./requirements2.txt
+%post
+    # Install dependencies from pip
+    pip install --upgrade pip
+    pip install -r ./requirements2.txt
