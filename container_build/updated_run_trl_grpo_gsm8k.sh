@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --account=berzelius-2025-74      # Project/account name
+#SBATCH --account=berzelius-2025-74      # Project account
 #SBATCH --gpus=1 -C "fat"                # Request 1 GPU on fat partition for 80GB VRAM
 #SBATCH --mem=0                          # Request all available memory on the node
 #SBATCH -t 0-72:00:00                    # Increase maximum runtime to 72 hours
@@ -7,27 +7,32 @@
 #SBATCH -o logs/trl_grpo_gsm8k_%j.out    # Standard output log
 #SBATCH -e logs/trl_grpo_gsm8k_%j.err    # Standard error log
 
-# Set HuggingFace environment variables to use storage appropriately
+# Enable error tracing to debug issues
+set -e
+set -x
+
+# Create logs directory if it doesn't exist
+mkdir -p logs
+
+# Set HuggingFace environment variables
 export HF_DATASETS_CACHE="/proj/berzelius-aiics-real/users/x_anbue/.huggingface_cache"
 export HF_HOME="/proj/berzelius-aiics-real/users/x_anbue/.huggingface_cache"
 export TRANSFORMERS_CACHE="/proj/berzelius-aiics-real/users/x_anbue/.huggingface_cache"
-# Update PYTHONPATH to include only the current directory
 export PYTHONPATH=$(pwd):$PYTHONPATH
 export HF_TOKEN=$(cat ~/.huggingface_token 2>/dev/null || echo "")
 
-# Aggressive memory optimization
+# Memory optimization
 export PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:64"
 export CUDA_VISIBLE_DEVICES=0
 export OMP_NUM_THREADS=4
 export MKL_NUM_THREADS=4
 export PYTORCH_NO_CUDA_MEMORY_CACHING=1
 
-# Create all output directories with detailed structure
+# Create output directories
 mkdir -p /proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/models/trl_grpo_finetuned/checkpoints
 mkdir -p /proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/models/trl_grpo_finetuned/progress
 mkdir -p /proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/results/trl_grpo/logs
 mkdir -p /proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/results/trl_grpo/tensorboard
-mkdir -p logs
 
 # Create TRL-optimized config 
 TEMP_CONFIG="/tmp/trl_grpo_config_optimized.yaml"
@@ -53,12 +58,10 @@ EOF
 
 echo "Created TRL-optimized config at $TEMP_CONFIG"
 
-# Define path to the Apptainer (Singularity) environment
+# Define container and paths
 APPTAINER_ENV="/proj/berzelius-aiics-real/users/x_anbue/env.sif"
-
-# Define paths
 MODEL_CONFIG="configs/qwen2.5_3b_config.yaml"
-GRPO_CONFIG=$TEMP_CONFIG  # Use our TRL-optimized config
+GRPO_CONFIG="$TEMP_CONFIG"
 TRAIN_DATA="/proj/berzelius-aiics-real/users/x_anbue/finellama-data/gsm8k/gsm8k_train.json"
 EVAL_DATA="/proj/berzelius-aiics-real/users/x_anbue/finellama-data/gsm8k/gsm8k_val.json"
 OUTPUT_DIR="/proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/models/trl_grpo_finetuned"
@@ -73,89 +76,20 @@ echo "Output directory: $OUTPUT_DIR"
 echo "Results directory: $RESULTS_DIR"
 echo "Using container: $APPTAINER_ENV"
 
-# Make the script executable
+# Make script executable
 chmod +x trl_grpo_gsm8k_train.py
 
-# Create a setup script to install required libraries in the container
-cat << EOF > /tmp/setup_trl_libs.sh
-#!/bin/bash
-# Setup script for installing required TRL libraries inside the container
+# Verify container and script
+echo "Verifying container imports..."
+apptainer exec --nv $APPTAINER_ENV python -c "import trl; from trl import GRPOConfig; import torch; print(f'TRL version: {trl.__version__}, PyTorch: {torch.__version__}')"
 
-# Install TRL and its dependencies
-pip install --no-cache-dir trl>=0.7.10
-pip install --no-cache-dir peft>=0.8.0
-pip install --no-cache-dir flash-attn==2.5.5
-pip install --no-cache-dir einops
-pip install --no-cache-dir triton==2.2.0
-pip install --no-cache-dir ninja
-pip install --no-cache-dir accelerate>=0.26.0
+# Verify script existence
+ls -la trl_grpo_gsm8k_train.py
+ls -la configs/qwen2.5_3b_config.yaml
+ls -la configs/qwen_gsm8k_grpo_config.yaml
 
-# Additional libraries for GRPO training
-pip install --no-cache-dir rouge-score
-pip install --no-cache-dir nltk
-pip install --no-cache-dir regex
-pip install --no-cache-dir pandas>=2.0.0
-
-echo "All TRL libraries installed successfully"
-EOF
-
-chmod +x /tmp/setup_trl_libs.sh
-
-# Set up enhanced monitoring
-(
-  MONITOR_LOG="logs/trl_grpo_monitoring_$(date +%Y%m%d).log"
-  echo "Starting enhanced monitoring at $(date)" > $MONITOR_LOG
-  echo "Job ID: $SLURM_JOB_ID, Node: $SLURMD_NODENAME" >> $MONITOR_LOG
-  echo "---------------------------------------" >> $MONITOR_LOG
-  
-  # Monitor the job every 5 minutes
-  while true; do
-    echo "===== $(date) =====" >> $MONITOR_LOG
-    
-    # GPU info
-    nvidia-smi >> $MONITOR_LOG
-    
-    # Find python process
-    PYTHON_PID=$(pgrep -f "python.*trl_grpo_gsm8k_train.py")
-    if [ -n "$PYTHON_PID" ]; then
-      echo "Process $PYTHON_PID stats:" >> $MONITOR_LOG
-      ps -o pid,ppid,pcpu,pmem,vsz,rss,time,etime,cmd -p $PYTHON_PID >> $MONITOR_LOG
-      
-      # Memory details
-      if [ -d "/proc/$PYTHON_PID" ]; then
-        echo "Memory details:" >> $MONITOR_LOG
-        grep -E "VmSize|VmRSS|VmSwap" /proc/$PYTHON_PID/status 2>/dev/null >> $MONITOR_LOG
-      fi
-    else
-      echo "TRL GRPO training process not found!" >> $MONITOR_LOG
-    fi
-    
-    # Check log progress
-    LOG_FILE="logs/trl_grpo_gsm8k_${SLURM_JOB_ID}.out"
-    if [ -f "$LOG_FILE" ]; then
-      echo "Recent log entries:" >> $MONITOR_LOG
-      tail -n 10 $LOG_FILE >> $MONITOR_LOG
-      
-      # Check for errors and progress
-      ERROR_COUNT=$(grep -c "ERROR" $LOG_FILE)
-      TIMEOUT_COUNT=$(grep -c "timeout" $LOG_FILE)
-      PROGRESS_COUNT=$(grep -c "step [0-9]" $LOG_FILE)
-      
-      echo "Log stats - Errors: $ERROR_COUNT, Timeouts: $TIMEOUT_COUNT, Progress markers: $PROGRESS_COUNT" >> $MONITOR_LOG
-    fi
-    
-    # Check for output files
-    echo "Output files:" >> $MONITOR_LOG
-    ls -la $OUTPUT_DIR/checkpoint-* 2>/dev/null | wc -l >> $MONITOR_LOG
-    
-    echo "---" >> $MONITOR_LOG
-    sleep 300  # Monitor every 5 minutes
-  done
-) &
-MONITOR_PID=$!
-
-# Run the training script using the container with installed libraries
-echo "Running training script inside container with installed TRL and flash-attn libraries..."
+# Run the training script inside the container (SIMPLIFIED, NO BACKGROUND MONITORING)
+echo "Running training script inside container..."
 apptainer exec --nv \
   --env PYTHONPATH="${PYTHONPATH}" \
   --env PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF}" \
@@ -167,31 +101,22 @@ apptainer exec --nv \
   --env HF_HOME="${HF_HOME}" \
   --env HF_DATASETS_CACHE="${HF_DATASETS_CACHE}" \
   --env TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE}" \
-  ${APPTAINER_ENV} bash -c "
-    # Run the setup script to install required libraries
-    bash /tmp/setup_trl_libs.sh
-    
-    # Run the training script with all arguments
-    python -u trl_grpo_gsm8k_train.py \
-      --model_config $MODEL_CONFIG \
-      --grpo_config $GRPO_CONFIG \
-      --train_data $TRAIN_DATA \
-      --eval_data $EVAL_DATA \
-      --output_dir $OUTPUT_DIR \
-      --results_dir $RESULTS_DIR \
-      --seed 42
-  "
+  $APPTAINER_ENV \
+  python -u trl_grpo_gsm8k_train.py \
+    --model_config $MODEL_CONFIG \
+    --grpo_config $GRPO_CONFIG \
+    --train_data $TRAIN_DATA \
+    --eval_data $EVAL_DATA \
+    --output_dir $OUTPUT_DIR \
+    --results_dir $RESULTS_DIR \
+    --seed 42
 
 TRAINING_EXIT_CODE=$?
-
-# Stop monitoring script
-kill $MONITOR_PID
 
 if [ $TRAINING_EXIT_CODE -eq 0 ]; then
   echo "TRL GRPO training and evaluation completed successfully"
 else
   echo "TRL GRPO training exited with code $TRAINING_EXIT_CODE"
-  
   # Create failure notification
   mkdir -p "${OUTPUT_DIR}/errors"
   echo "Training failed with exit code ${TRAINING_EXIT_CODE}" > "${OUTPUT_DIR}/errors/failure_$(date +%Y%m%d_%H%M%S).txt"
@@ -200,5 +125,5 @@ fi
 echo "Model saved to: $OUTPUT_DIR"
 echo "Results saved to: $RESULTS_DIR"
 
-# Cleanup temporary config
+# Cleanup
 rm -f $TEMP_CONFIG 

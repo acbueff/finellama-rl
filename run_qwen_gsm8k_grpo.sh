@@ -179,6 +179,29 @@ echo "Using container: $APPTAINER_ENV"
 # Ensure the script is executable
 chmod +x qwen_gsm8k_grpo_train.py
 
+# Create a setup script to install required libraries in the container
+cat << EOF > /tmp/setup_container_libs.sh
+#!/bin/bash
+# Setup script for installing required libraries inside the container
+
+# Install necessary libraries for this experiment
+pip install --no-cache-dir flash-attn==2.5.5
+pip install --no-cache-dir einops
+pip install --no-cache-dir triton==2.2.0
+pip install --no-cache-dir ninja
+
+# Additional libraries specifically needed for GRPO experiments
+pip install --no-cache-dir rouge-score
+pip install --no-cache-dir nltk
+pip install --no-cache-dir regex
+pip install --no-cache-dir accelerate>=0.26.0
+pip install --no-cache-dir trl>=0.7.10
+
+echo "All libraries installed successfully"
+EOF
+
+chmod +x /tmp/setup_container_libs.sh
+
 # Run the training script within the Apptainer container with monitoring
 echo "Running training script inside container..."
 apptainer exec --nv \
@@ -193,16 +216,22 @@ apptainer exec --nv \
   --env GENERATION_TIMEOUT_SECONDS="${GENERATION_TIMEOUT_SECONDS}" \
   --env HF_DATASETS_CACHE="${HF_DATASETS_CACHE}" \
   --env TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE}" \
-  ${APPTAINER_ENV} python -u qwen_gsm8k_grpo_train.py \
-  --model_config $MODEL_CONFIG \
-  --grpo_config $GRPO_CONFIG \
-  --train_data $TRAIN_DATA \
-  --eval_data $EVAL_DATA \
-  --output_dir $OUTPUT_DIR \
-  --results_dir $RESULTS_DIR \
-  --eval_steps 200 \
-  --eval_examples 25 \
-  --seed 42
+  ${APPTAINER_ENV} bash -c "
+    # Run the setup script to install required libraries
+    bash /tmp/setup_container_libs.sh
+    
+    # Run the training script with all arguments
+    python -u qwen_gsm8k_grpo_train.py \
+      --model_config $MODEL_CONFIG \
+      --grpo_config $GRPO_CONFIG \
+      --train_data $TRAIN_DATA \
+      --eval_data $EVAL_DATA \
+      --output_dir $OUTPUT_DIR \
+      --results_dir $RESULTS_DIR \
+      --eval_steps 200 \
+      --eval_examples 25 \
+      --seed 42
+  "
 
 TRAINING_EXIT_CODE=$?
 

@@ -29,8 +29,18 @@ from transformers import (
 )
 from peft import LoraConfig, get_peft_model
 
-# TRL imports
+# TRL imports - import directly, do not use grpo-libs path
 from trl import GRPOConfig, GRPOTrainer
+import trl
+import inspect
+
+# Add version printing for debugging
+print(f"Using TRL version: {trl.__version__}")
+
+# Get valid parameters for GRPOConfig in the installed version
+valid_params = list(inspect.signature(GRPOConfig.__init__).parameters.keys())
+valid_params.remove('self')  # Remove 'self' from the list
+print(f"Valid GRPOConfig parameters count: {len(valid_params)}")
 
 # Configure logging
 logging.basicConfig(
@@ -329,43 +339,52 @@ def main():
     train_dataset_loader = GSM8KDataset(args.train_data, tokenizer)
     train_dataset = train_dataset_loader.to_hf_dataset()
     
-    # Set up GRPO configuration
-    training_args = GRPOConfig(
-        output_dir=args.output_dir,
-        num_train_epochs=grpo_config.get("num_epochs", 2),
-        per_device_train_batch_size=grpo_config.get("batch_size", 2),
-        per_device_eval_batch_size=grpo_config.get("batch_size", 2),
-        gradient_accumulation_steps=grpo_config.get("gradient_accumulation_steps", 16),
-        learning_rate=grpo_config.get("learning_rate", 2e-5),
-        weight_decay=grpo_config.get("weight_decay", 0.01),
-        max_grad_norm=grpo_config.get("max_grad_norm", 1.0),
-        remove_unused_columns=False,
-        max_prompt_length=grpo_config.get("prompt_max_length", 256),
-        max_completion_length=grpo_config.get("response_max_length", 128),
-        num_generations=grpo_config.get("num_sample_pairs", 4),
-        logging_steps=grpo_config.get("log_interval", 5),
-        save_steps=grpo_config.get("save_interval", 50),
-        evaluation_strategy="steps",
-        eval_steps=grpo_config.get("eval_interval", 200),
-        warmup_steps=grpo_config.get("warmup_steps", 50),
-        lr_scheduler_type=grpo_config.get("lr_scheduler_type", "cosine"),
-        bf16=True,  # Use bfloat16 for faster training
-        bf16_full_eval=True,
-        optim="adamw_torch",
-        seed=args.seed,
-        fp16=False,  # Don't use fp16 when bf16 is enabled
-        dataloader_drop_last=True,
-        dataloader_num_workers=grpo_config.get("num_workers", 2),
-        disable_dropout=True,  # Disable dropout for more stable training
-        temperature=grpo_config.get("temperature", 0.7),
-        top_p=grpo_config.get("top_p", 0.9),
-        top_k=grpo_config.get("top_k", 20),
-        epsilon=0.2,  # PPO clipping parameter
-        beta=grpo_config.get("kl_penalty_weight", 0.1),  # KL coefficient
-        scale_rewards=not grpo_config.get("disable_reward_scaling", False),
-        mask_truncated_completions=True,  # Better training stability
-        log_completions=True,  # Log a sample of completions for debugging
-    )
+    # Set up GRPO configuration with only parameters that exist in the installed version
+    config_dict = {
+        'output_dir': args.output_dir,
+        'num_train_epochs': grpo_config.get("num_epochs", 2),
+        'per_device_train_batch_size': grpo_config.get("batch_size", 2),
+        'per_device_eval_batch_size': grpo_config.get("batch_size", 2),
+        'gradient_accumulation_steps': grpo_config.get("gradient_accumulation_steps", 16),
+        'learning_rate': grpo_config.get("learning_rate", 2e-5),
+        'weight_decay': grpo_config.get("weight_decay", 0.01),
+        'max_grad_norm': grpo_config.get("max_grad_norm", 1.0),
+        'remove_unused_columns': False,
+        'logging_steps': grpo_config.get("log_interval", 5),
+        'save_steps': grpo_config.get("save_interval", 50),
+        'eval_steps': grpo_config.get("eval_interval", 200),
+        'warmup_steps': grpo_config.get("warmup_steps", 50),
+        'lr_scheduler_type': grpo_config.get("lr_scheduler_type", "cosine"),
+        'bf16': True,  # Use bfloat16 for faster training
+        'optim': "adamw_torch",
+        'seed': args.seed,
+        'fp16': False,  # Don't use fp16 when bf16 is enabled
+        'dataloader_drop_last': True,
+        
+        # GRPO-specific parameters
+        'max_prompt_length': grpo_config.get("prompt_max_length", 256),
+        'max_completion_length': grpo_config.get("response_max_length", 128),
+        'num_generations': grpo_config.get("num_sample_pairs", 4),
+        'temperature': grpo_config.get("temperature", 0.7),
+        'top_p': grpo_config.get("top_p", 0.9),
+        'top_k': grpo_config.get("top_k", 20),
+        'beta': grpo_config.get("kl_penalty_weight", 0.1),  # KL coefficient
+        'epsilon': 0.2,  # PPO clipping parameter
+        'epsilon_high': 0.28,  # Upper bound for asymmetric clipping (DAPO recommendation)
+        'reward_weights': [1.0, 0.5, 0.2],  # Weights for reward functions [correctness, reasoning, brevity]
+        'scale_rewards': not grpo_config.get("disable_reward_scaling", False),
+        'sync_ref_model': True,  # Periodic update of reference model
+        'ref_model_sync_steps': 100,  # Sync reference model every 100 steps
+        'ref_model_mixup_alpha': 0.6,  # Mix 60% current policy, 40% old reference policy
+        'log_completions': True,  # Log a sample of completions for debugging
+    }
+    
+    # Filter out parameters that don't exist in the current TRL version
+    filtered_config = {k: v for k, v in config_dict.items() if k in valid_params}
+    print(f"Using filtered config parameters: {sorted(list(filtered_config.keys()))}")
+    print(f"Omitted parameters: {sorted([k for k in config_dict.keys() if k not in valid_params])}")
+    
+    training_args = GRPOConfig(**filtered_config)
     
     # Setup 4-bit quantization if enabled
     if model_config.get("load_in_4bit", True):
@@ -402,19 +421,34 @@ def main():
     logger.info(f"  Number of generations: {training_args.num_generations}")
     logger.info(f"  Training epochs: {training_args.num_train_epochs}")
     
+    # Before creating the GRPO trainer, print the available parameters
+    print("Available GRPOTrainer parameters:", [p for p in inspect.signature(GRPOTrainer.__init__).parameters.keys() if p != 'self'])
+
+    # Pre-load the model with the required config
+    print(f"Loading model: {model_path}")
+    model = None
+    if model_config.get("load_in_4bit", True):
+        # For 4-bit model, we need to load it directly
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            quantization_config=quatization_config,
+            trust_remote_code=model_config.get("trust_remote_code", True),
+            attn_implementation=model_config.get("attn_implementation", "flash_attention_2"),
+            device_map="auto",
+        )
+        
+        # Apply LoRA if enabled
+        if model_config.get("use_peft", True):
+            print("Applying LoRA to pre-loaded model")
+            model = get_peft_model(model, lora_config)
+    
     # Create GRPO Trainer
     trainer = GRPOTrainer(
-        model=model_path,
+        model=model or model_path,  # Use pre-loaded model if available, otherwise just pass the path
         processing_class=tokenizer,
         args=training_args,
         train_dataset=train_dataset,
-        peft_config=lora_config if model_config.get("use_peft", True) else None,
-        model_init_kwargs={
-            "quantization_config": quatization_config,
-            "trust_remote_code": model_config.get("trust_remote_code", True),
-            "attn_implementation": model_config.get("attn_implementation", "flash_attention_2"),
-            "device_map": "auto",
-        },
+        peft_config=lora_config if model_config.get("use_peft", True) and model is None else None,
         reward_funcs=[
             # Correctness reward (most important)
             correctness_reward_func,

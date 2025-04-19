@@ -1,0 +1,148 @@
+Bootstrap: docker
+From: pytorch/pytorch:2.1.2-cuda12.1-cudnn8-devel
+
+%labels
+    Author "HPC ML Expert"
+    Version 1.0
+    Description "Container with PyTorch, TRL, flash-attention for GRPO training"
+
+%environment
+    export LC_ALL=C
+    export PATH="/opt/conda/bin:$PATH"
+    export CUDA_HOME="/usr/local/cuda"
+    export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
+    export TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;9.0"
+    export MAX_JOBS=4
+
+%post
+    # System update and dependencies
+    apt-get update && apt-get install -y --no-install-recommends \
+        git curl vim wget build-essential ca-certificates \
+        libjpeg-dev libpng-dev libopenblas-dev ninja-build cmake \
+        && rm -rf /var/lib/apt/lists/*
+    
+    # Ensure CUDA environment variables are set
+    echo 'export CUDA_HOME="/usr/local/cuda"' >> /etc/bash.bashrc
+    echo 'export PATH="/usr/local/cuda/bin:$PATH"' >> /etc/bash.bashrc
+    echo 'export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH"' >> /etc/bash.bashrc
+    echo 'export TORCH_CUDA_ARCH_LIST="7.0;7.5;8.0;8.6;9.0"' >> /etc/bash.bashrc
+    echo 'export MAX_JOBS=4' >> /etc/bash.bashrc
+    
+    # Create installation log directory
+    mkdir -p /opt/install_logs
+    
+    # Upgrade pip and install base dependencies
+    echo "Upgrading pip..." | tee /opt/install_logs/01_pip_upgrade.log
+    pip install --no-cache-dir --upgrade pip | tee -a /opt/install_logs/01_pip_upgrade.log
+    
+    # Install core dependencies with pinned versions
+    echo "Installing core PyTorch ecosystem..." | tee /opt/install_logs/02_core_deps.log
+    pip install --no-cache-dir \
+        numpy==1.24.3 \
+        scipy==1.10.1 \
+        | tee -a /opt/install_logs/02_core_deps.log
+    
+    # Install Hugging Face ecosystem with pinned versions
+    echo "Installing Hugging Face ecosystem..." | tee /opt/install_logs/03_hf_ecosystem.log
+    pip install --no-cache-dir \
+        transformers==4.31.0 \
+        datasets==2.14.5 \
+        accelerate==0.21.0 \
+        peft==0.4.0 \
+        evaluate==0.4.0 \
+        sentencepiece==0.1.99 \
+        protobuf==3.20.3 \
+        tokenizers==0.13.3 \
+        | tee -a /opt/install_logs/03_hf_ecosystem.log
+    
+    # Verify HF installation
+    python -c "import transformers; print(f'Transformers version: {transformers.__version__}')" | tee /opt/install_logs/04_hf_verify.log
+    
+    # Install flash-attention prerequisites
+    echo "Installing flash-attention prerequisites..." | tee /opt/install_logs/05_flash_attn_prereq.log
+    pip install --no-cache-dir \
+        einops==0.6.1 \
+        packaging==23.1 \
+        triton==2.0.0 \
+        | tee -a /opt/install_logs/05_flash_attn_prereq.log
+    
+    # Install flash-attention (with retry and error handling)
+    echo "Installing flash-attention..." | tee /opt/install_logs/06_flash_attn.log
+    export FLASH_ATTN_INSTALL_LOG="/opt/install_logs/06_flash_attn.log"
+    
+    pip install --no-cache-dir flash-attn==2.3.3 | tee -a $FLASH_ATTN_INSTALL_LOG || \
+    (echo "Standard flash-attention install failed, trying with no build isolation..." | tee -a $FLASH_ATTN_INSTALL_LOG && \
+     pip install --no-cache-dir --no-build-isolation flash-attn==2.3.3 | tee -a $FLASH_ATTN_INSTALL_LOG) || \
+    (echo "No build isolation failed, trying from source..." | tee -a $FLASH_ATTN_INSTALL_LOG && \
+     cd /tmp && \
+     git clone https://github.com/Dao-AILab/flash-attention.git && \
+     cd flash-attention && \
+     git checkout v2.3.3 && \
+     pip install --no-build-isolation . | tee -a $FLASH_ATTN_INSTALL_LOG)
+    
+    # Verify flash-attention installation
+    echo "Verifying flash-attention installation..." | tee /opt/install_logs/07_flash_attn_verify.log
+    python -c "import flash_attn; print(f'Flash-attention version: {flash_attn.__version__}')" | tee -a /opt/install_logs/07_flash_attn_verify.log
+    
+    # Install TRL (with retry and error handling)
+    echo "Installing TRL..." | tee /opt/install_logs/08_trl.log
+    export TRL_INSTALL_LOG="/opt/install_logs/08_trl.log"
+    
+    pip install --no-cache-dir trl==0.7.10 | tee -a $TRL_INSTALL_LOG || \
+    (echo "Standard TRL install failed, trying from source..." | tee -a $TRL_INSTALL_LOG && \
+     cd /tmp && \
+     git clone https://github.com/huggingface/trl.git && \
+     cd trl && \
+     git checkout v0.7.10 && \
+     pip install -e . | tee -a $TRL_INSTALL_LOG)
+    
+    # Verify TRL installation
+    echo "Verifying TRL installation..." | tee /opt/install_logs/09_trl_verify.log
+    python -c "import trl; print(f'TRL version: {trl.__version__}')" | tee -a /opt/install_logs/09_trl_verify.log
+    
+    # Install additional utils
+    echo "Installing additional utilities..." | tee /opt/install_logs/10_additional_utils.log
+    pip install --no-cache-dir \
+        rouge-score==0.1.2 \
+        nltk==3.8.1 \
+        pandas==2.0.3 \
+        tensorboard==2.13.0 \
+        scikit-learn==1.2.2 \
+        bitsandbytes==0.40.2 \
+        safetensors==0.3.2 \
+        | tee -a /opt/install_logs/10_additional_utils.log
+    
+    # Clean up
+    echo "Cleaning up..." | tee /opt/install_logs/11_cleanup.log
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+    pip cache purge
+    rm -rf /tmp/flash-attention /tmp/trl
+    
+    # Create installation summary
+    echo "Creating installation summary..." | tee /opt/install_logs/12_summary.log
+    pip list | tee -a /opt/install_logs/12_summary.log
+    
+    echo "Container build completed successfully!" | tee -a /opt/install_logs/12_summary.log
+
+%test
+    #!/bin/bash
+    set -e
+    echo "Running container tests..."
+    
+    echo "Testing PyTorch installation..."
+    python -c "import torch; assert torch.cuda.is_available(), 'CUDA not available'; print(f'PyTorch {torch.__version__} with CUDA {torch.version.cuda}')"
+    
+    echo "Testing flash-attention installation..."
+    python -c "import flash_attn; print(f'Flash-attention {flash_attn.__version__}')"
+    
+    echo "Testing TRL installation..."
+    python -c "import trl; print(f'TRL {trl.__version__}')"
+    
+    echo "Testing TRL GRPOTrainer..."
+    python -c "from trl import GRPOTrainer; print('GRPOTrainer import successful')"
+    
+    echo "All tests passed successfully!"
+
+%runscript
+    exec python "$@"
