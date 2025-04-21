@@ -461,7 +461,16 @@ def main():
     
     # Start training
     logger.info("Starting GRPO training")
-    trainer.train()
+    try:
+        trainer.train()
+    except Exception as e:
+        logger.error(f"Training failed with exception: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        # Save error information to file
+        with open(os.path.join(args.output_dir, "error_details.txt"), "w") as f:
+            f.write(f"Error: {str(e)}\n\n")
+            f.write(traceback.format_exc())
     
     # Save final model
     trainer.save_model()

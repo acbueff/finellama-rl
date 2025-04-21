@@ -31,46 +31,6 @@ TRAIN_DATA="/proj/berzelius-aiics-real/users/x_anbue/finellama-data/gsm8k/gsm8k_
 EVAL_DATA="/proj/berzelius-aiics-real/users/x_anbue/finellama-data/gsm8k/gsm8k_val.json"
 OUTPUT_DIR="/proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/models/trl_grpo_finetuned"
 RESULTS_DIR="/proj/berzelius-aiics-real/users/x_anbue/qwen_gsm8k/results/trl_grpo"
-TRL_SOURCE_PATH="$PWD/grpo-libs/trl-main" # Path to your local TRL source
-
-#### 3) Populate host TRL source into /tmp ####
-# Apptainer bind‐mounts host /tmp by default, so copy your local checkout there:
-echo "→ Copying TRL source from $TRL_SOURCE_PATH into /tmp/trl-source for container…"
-if [ ! -d "$TRL_SOURCE_PATH" ]; then
-    echo "ERROR: TRL source directory not found at $TRL_SOURCE_PATH" >&2
-    exit 1
-fi
-rm -rf /tmp/trl-source
-cp -r "$TRL_SOURCE_PATH" /tmp/trl-source
-if [ $? -ne 0 ]; then
-    echo "ERROR: Failed to copy TRL source to /tmp" >&2
-    exit 1
-fi
-echo "→ TRL source copied successfully."
-
-#### 4) Pre‐flight import check ####
-echo "→ Performing pre-flight check inside container..."
-apptainer exec --nv "$APPTAINER_ENV" python - <<'EOF'
-import sys
-import os
-print(f"Checking existence of /tmp/trl-source: {os.path.exists('/tmp/trl-source')}")
-print(f"Content of /tmp/trl-source: {os.listdir('/tmp/trl-source')[:5]}...") # List first 5 items
-# verify trl is importable now that /tmp/trl-source is populated
-try:
-    import trl
-    from trl import GRPOConfig
-    print(f"✔ TRL import test passed: {trl.__version__} from {trl.__file__}")
-except Exception as e:
-    print(f"✘ TRL import test failed: {e}", file=sys.stderr)
-    sys.exit(1)
-EOF
-PREFLIGHT_EXIT_CODE=$?
-if [ $PREFLIGHT_EXIT_CODE -ne 0 ]; then
-    echo "ERROR: Pre-flight check failed. Exiting." >&2
-    exit 1
-fi
-echo "→ Pre-flight check passed."
-
 
 #### 5) Prepare output dirs ####
 mkdir -p logs \
@@ -82,6 +42,12 @@ cp "$BASE_GRPO_CONFIG" "$TEMP_CONFIG"
 cat <<EOF >>"$TEMP_CONFIG"
 
 # === appended by Slurm script ===
+# Memory reduction overrides:
+batch_size: 1
+gradient_accumulation_steps: 64
+num_sample_pairs: 2
+
+# Original overrides:
 loss_type: "dr_grpo"
 mask_truncated_completions: true
 disable_reward_scaling: true
