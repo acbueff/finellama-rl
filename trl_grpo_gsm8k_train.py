@@ -328,12 +328,14 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(
         model_path,
         use_fast=model_config.get("use_fast_tokenizer", True),
-        trust_remote_code=model_config.get("trust_remote_code", True)
+        trust_remote_code=model_config.get("trust_remote_code", True),
+        cache_dir=model_config.get("cache_dir", None)
     )
     
     # Make sure tokenizer has pad token
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = 'left'  # Required for Flash Attention Qwen2 with batches
     
     # Load datasets
     train_dataset_loader = GSM8KDataset(args.train_data, tokenizer)

@@ -42,11 +42,6 @@ cp "$BASE_GRPO_CONFIG" "$TEMP_CONFIG"
 cat <<EOF >>"$TEMP_CONFIG"
 
 # === appended by Slurm script ===
-# Memory reduction overrides:
-batch_size: 1
-gradient_accumulation_steps: 64
-num_sample_pairs: 2
-
 # Original overrides:
 loss_type: "dr_grpo"
 mask_truncated_completions: true
